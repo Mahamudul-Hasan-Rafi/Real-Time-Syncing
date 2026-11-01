@@ -30,7 +30,7 @@ Oracle (archive log) -> Debezium (LogMiner) -> Kafka  emob.EMOB.<TABLE>  ->  cdc
 1. Run the scripts in `Packages/cdc/dba_scripts/` (in order `01` to `03`) on Oracle.
 2. Start Kafka, Connect and monitoring: `docker compose -f Packages/cdc/docker-compose.yml up -d`
    (or `docker-compose.podman.yml` for Podman).
-3. Register the connector:
+3. Replace the `<ORACLE_HOST>` and `<CDC_USER_PASSWORD>` placeholders in the connector config (do not commit the real values), then register it:
    `curl -X POST -H "Content-Type: application/json" --data @Packages/cdc/emob-oracle-connector.json http://localhost:8083/connectors`
 4. Start Elasticsearch and Kibana: `docker compose -f Packages/cdc/elastic/docker-compose.yml up -d`
 5. Run the initial load with Logstash using the pipelines in `Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/pipeline/`.
