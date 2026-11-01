@@ -18,7 +18,7 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9222,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://${KAFKA_HOST:-10.11.200.109}:${KAFKA_PORT:-9222}
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://${KAFKA_HOST:?set KAFKA_HOST in Packages/cdc/.env (this machine IP or DNS name)}:${KAFKA_PORT:-9222}
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
@@ -68,30 +68,55 @@ services:
       retries: 60
       start_period: 15s
 
-  # One-shot: registers the Debezium connector once Connect is healthy (skipped if it already exists).
+  # One-shot: registers the Debezium connector once Connect is healthy. emob-oracle-connector.json is a template:
+  # ${ORACLE_HOST}, ${ORACLE_PORT} and ${CDC_USER_PASSWORD} are filled in from Packages/cdc/.env (see .env.example).
+  # Nothing happens if the connector already exists. To register it again: docker compose run --rm connector-init
   connector-init:
     image: era/debezium-connect-oracle:3.7.0
     depends_on:
       connect:
         condition: service_healthy
     restart: "no"
+    environment:
+      ORACLE_HOST: ${ORACLE_HOST:-}
+      ORACLE_PORT: ${ORACLE_PORT:-1521}
+      CDC_USER_PASSWORD: ${CDC_USER_PASSWORD:-}
     volumes:
       - ./emob-oracle-connector.json:/tmp/connector.json:ro,z
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        echo "checking Oracle listener ${ORACLE_HOST:-10.11.200.37}:${ORACLE_PORT:-1521}"
-        if ! timeout 5 bash -c "echo > /dev/tcp/${ORACLE_HOST:-10.11.200.37}/${ORACLE_PORT:-1521}"; then
-          echo "ERROR: cannot reach Oracle - connector not registered" >&2
+        # ($$ below is Compose's escape for a literal $)
+        NAME=emob-oracle-cdc
+        API=http://connect:8083/connectors
+        if curl -sf "$$API/$$NAME" >/dev/null; then
+          echo "connector $$NAME already registered - nothing to do"
+          exit 0
+        fi
+        if [ -z "$$ORACLE_HOST" ] || [ -z "$$CDC_USER_PASSWORD" ]; then
+          echo "ERROR: connector not registered. Set ORACLE_HOST and CDC_USER_PASSWORD in Packages/cdc/.env" >&2
+          echo "       (copy .env.example), then run: docker compose run --rm connector-init" >&2
+          exit 1
+        fi
+        echo "checking Oracle listener $$ORACLE_HOST:$$ORACLE_PORT"
+        if ! timeout 5 bash -c "echo > /dev/tcp/$$ORACLE_HOST/$$ORACLE_PORT"; then
+          echo "ERROR: cannot reach Oracle at $$ORACLE_HOST:$$ORACLE_PORT - connector not registered" >&2
           exit 1
         fi
         echo "Oracle reachable"
-        if curl -sf http://connect:8083/connectors/emob-oracle-cdc >/dev/null; then
-          echo "connector already registered"
-        else
-          curl -s -X POST -H 'Content-Type: application/json' --data @/tmp/connector.json http://connect:8083/connectors
+        shopt -u patsub_replacement 2>/dev/null || true       # a literal & in the password must stay literal
+        json_escape() { local s=$${1//\\/\\\\}; s=$${s//\"/\\\"}; printf '%s' "$$s"; }
+        body=$$(cat /tmp/connector.json)
+        body=$${body//'$${ORACLE_HOST}'/$$(json_escape "$$ORACLE_HOST")}
+        body=$${body//'$${ORACLE_PORT}'/$$(json_escape "$$ORACLE_PORT")}
+        body=$${body//'$${CDC_USER_PASSWORD}'/$$(json_escape "$$CDC_USER_PASSWORD")}
+        code=$$(curl -s -o /tmp/response.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data "$$body" "$$API")
+        cat /tmp/response.json; echo
+        if [ "$$code" -ge 300 ]; then
+          echo "ERROR: Kafka Connect answered HTTP $$code - connector not registered" >&2
+          exit 1
         fi
-        echo
+        echo "connector $$NAME registered"
 
   kafka-ui:
     build: ./dockerfiles/kafka-ui

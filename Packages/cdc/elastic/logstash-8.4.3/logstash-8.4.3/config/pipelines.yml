@@ -4,21 +4,22 @@
 # Elasticsearch here is 4 CPUs / 2 GB heap, so it sets the limit, not this 48-core host.
 # Batches are sized so in-flight bulk data stays well below its 10% heap indexing-pressure limit.
 #
-# Keep backslashes in path.config: Logstash 8.4.3 reads D:/... as a URL with scheme "d" and
-# silently loads nothing. Single quotes stop YAML treating the backslashes as escapes.
+# Paths are relative to the Logstash folder: scripts/run_pipelines.(cmd|sh) start Logstash from there.
+# Do not use absolute Windows paths here: Logstash 8.4.3 reads D:/... as a URL with scheme "d" and silently
+# loads nothing.
 
 - pipeline.id: ac_balance_data
-  path.config: 'D:\Kafka\Packages\cdc\elastic\logstash-8.4.3\logstash-8.4.3\pipeline\Offline_balance_data_transfer.conf'
+  path.config: 'pipeline/Offline_balance_data_transfer.conf'
   pipeline.workers: 2
   pipeline.batch.size: 2000
 
 # Largest documents: nested JSON arrays for documents, addresses, operators and nominees.
 - pipeline.id: customer_data
-  path.config: 'D:\Kafka\Packages\cdc\elastic\logstash-8.4.3\logstash-8.4.3\pipeline\Offline_data_transfer.conf'
+  path.config: 'pipeline/Offline_data_transfer.conf'
   pipeline.workers: 2
   pipeline.batch.size: 500
 
 - pipeline.id: transaction_history
-  path.config: 'D:\Kafka\Packages\cdc\elastic\logstash-8.4.3\logstash-8.4.3\pipeline\Offline_transaction_data_transfer.conf'
+  path.config: 'pipeline/Offline_transaction_data_transfer.conf'
   pipeline.workers: 2
   pipeline.batch.size: 1000

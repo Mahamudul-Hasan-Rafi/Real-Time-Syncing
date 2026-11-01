@@ -1,0 +1,394 @@
+{
+  "index_patterns": [
+    "transaction_history_*"
+  ],
+  "priority": 200,
+  "version": 1,
+  "_meta": {
+    "description": "Managed by logstash-pipeline; schema is a strict contract with the SQL."
+  },
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 0,
+        "refresh_interval": "30s"
+      }
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "ac_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_no": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_point_category": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_point_category_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_point_district": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_point_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_point_name": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "ac_prefix": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_status": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_title": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "ac_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_type_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "agent_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "agent_mail_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "agent_name": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "alltrn": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "aml_sending_date": {
+          "type": "date"
+        },
+        "aml_status_update_date": {
+          "type": "date"
+        },
+        "aml_sts": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "aml_token_no": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "amount": {
+          "type": "scaled_float",
+          "scaling_factor": 1000
+        },
+        "area_name": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "bal_flag": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "branch_code": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "charge_flag": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "cheque_date": {
+          "type": "date"
+        },
+        "cheque_no": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "cheque_serise": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "close_date": {
+          "type": "date"
+        },
+        "con_isl": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "create_by": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "create_date": {
+          "type": "date"
+        },
+        "cust_no": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "cust_status": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "cust_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "dep_nature": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "doc_date": {
+          "type": "date"
+        },
+        "doc_num": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "dr_cr": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "drcr_code": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ekyc_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "etl_loaded_at": {
+          "type": "date"
+        },
+        "etl_pipeline": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "final_check": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "final_check_by": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "final_check_date": {
+          "type": "date"
+        },
+        "glac_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ini_check": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ini_check_by": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ini_check_date": {
+          "type": "date"
+        },
+        "lat": {
+          "type": "double"
+        },
+        "lng": {
+          "type": "double"
+        },
+        "loc_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "location_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "mobile_no": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "mobile_no2": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "naration": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "occupation": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "open_date": {
+          "type": "date"
+        },
+        "opr_ins": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "point_category": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "point_district": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "point_name": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "point_union": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "point_upazilla": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "post_code": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "product_name": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "ref_agn": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ref_doc_no": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "rev_tran_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "sector_code": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "short_name": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "sl_num": {
+          "type": "long"
+        },
+        "src": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "status": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "tags": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "tran_code": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "tran_desc": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "tran_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "tran_point_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "tran_time": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "tran_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "trans_branch_code": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "type_desc": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "value_date": {
+          "type": "date"
+        },
+        "verify_by": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "verify_date": {
+          "type": "date"
+        },
+        "verify_status": {
+          "type": "keyword",
+          "ignore_above": 1024
+        }
+      }
+    }
+  }
+}

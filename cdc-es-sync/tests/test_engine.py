@@ -77,9 +77,21 @@ def change(table, op, before=None, after=None, offset=0):
 @pytest.fixture
 def env(registry, cfg):
     reader, writer, dlq, stop = FakeReader(), FakeWriter(), FakeDlq(), Stop()
-    engine = Engine(registry, reader, writer, dlq, {**cfg["sync"], "retry_max_backoff_seconds": 0.01, "throttle_ms": 1},
+    # These tests cover every change type; config.yaml itself applies only updates and deletes (see the tests at the end).
+    engine = Engine(registry, reader, writer, dlq, {**cfg["sync"], "retry_max_backoff_seconds": 0.01, "throttle_ms": 1,
+                                                    "operations": ["c", "u", "d", "r"]},
                     "Asia/Dhaka", stop, Metrics())
     return engine, reader, writer, dlq, stop
+
+
+@pytest.fixture
+def configured(registry, cfg):
+    """An engine with the operations exactly as config.yaml sets them."""
+    reader, writer, dlq, stop = FakeReader(), FakeWriter(), FakeDlq(), Stop()
+    metrics = Metrics()
+    engine = Engine(registry, reader, writer, dlq, {**cfg["sync"], "retry_max_backoff_seconds": 0.01, "throttle_ms": 1},
+                    "Asia/Dhaka", stop, metrics)
+    return engine, reader, writer, dlq, metrics
 
 
 def tran_row(tran_id, amount=10, **more):
@@ -299,3 +311,142 @@ def test_resync_writes_every_row(env):
     reader.rows["transaction_history"] = {(i,): tran_row(i) for i in range(1, 1201)}
     assert engine.resync("transaction_history") == 1200
     assert len(writer.ops) == 1200 and {o.action for o in writer.ops} == {"index"}
+
+
+# ---------------------------------------------------------------- which change types are applied
+def skipped(metrics, reason="operation_not_enabled"):
+    return metrics.skipped.labels(reason)._value.get()
+
+
+def test_config_applies_updates_and_deletes_only(cfg):
+    assert cfg["sync"]["operations"] == ["u", "d"]
+
+
+def test_insert_is_read_but_not_applied(configured):
+    engine, reader, writer, dlq, metrics = configured
+    reader.rows["transaction_history"] = {(5,): tran_row(5)}
+    engine.process([change("MB_TRANSACTION_DTL", "c", after={"TRAN_ID": "5"})])
+    assert not writer.ops and not reader.fetches and not reader.field_fetches and not dlq.items
+    assert skipped(metrics) == 1
+
+
+def test_child_row_insert_is_ignored_too(configured):
+    engine, reader, writer, _, metrics = configured
+    reader.lookups[("a.ac_no", (("AC_ID", 9),))] = [("A9",)]
+    reader.rows["customer_data"] = {("A9",): {"ac_no": "A9", "nominee": "[]"}}
+    engine.process([change("NOMINEE_MST", "c", after={"AC_ID": "9", "NOMINEE_ID": "1"})])
+    assert not writer.ops and skipped(metrics) == 1
+
+
+def test_snapshot_read_is_ignored(configured):
+    engine, reader, writer, _, metrics = configured
+    engine.process([change("MB_TRANSACTION_DTL", "r", after={"TRAN_ID": "5"})])
+    assert not writer.ops and skipped(metrics) == 1
+
+
+def test_update_is_still_applied(configured):
+    engine, reader, writer, *_ = configured
+    reader.rows["transaction_history"] = {(5,): tran_row(5, naration="new")}
+    engine.process([tran_changed(5, col="NARATION")])
+    assert [(o.action, o.doc) for o in writer.ops] == [("update", {"naration": "new"})]
+
+
+def test_delete_is_still_applied(configured):
+    engine, reader, writer, *_ = configured
+    engine.process([change("MB_TRANSACTION_DTL", "d", before={"TRAN_ID": "5"})])
+    assert [(o.action, o.doc_id) for o in writer.ops] == [("delete", "5")]
+
+
+def test_a_mixed_batch_applies_only_updates_and_deletes(configured):
+    engine, reader, writer, _, metrics = configured
+    reader.rows["transaction_history"] = {(6,): tran_row(6, naration="n")}
+    engine.process([change("MB_TRANSACTION_DTL", "c", after={"TRAN_ID": "5"}, offset=1),
+                    tran_changed(6, col="NARATION", offset=2),
+                    change("MB_TRANSACTION_DTL", "d", before={"TRAN_ID": "7"}, offset=3)])
+    assert sorted((o.action, o.doc_id) for o in writer.ops) == [("delete", "7"), ("update", "6")]
+    assert skipped(metrics) == 1
+
+
+def test_inserts_can_be_switched_back_on(registry, cfg):
+    reader, writer = FakeReader(), FakeWriter()
+    reader.rows["transaction_history"] = {(5,): tran_row(5)}
+    engine = Engine(registry, reader, writer, FakeDlq(), {**cfg["sync"], "operations": ["c", "u", "d"]},
+                    "Asia/Dhaka", Stop(), Metrics())
+    engine.process([change("MB_TRANSACTION_DTL", "c", after={"TRAN_ID": "5"})])
+    assert [o.action for o in writer.ops] == ["index"]
+
+
+def test_unknown_operation_in_config_is_rejected(registry, cfg):
+    with pytest.raises(ValueError, match="unknown"):
+        Engine(registry, FakeReader(), FakeWriter(), FakeDlq(), {**cfg["sync"], "operations": ["u", "x"]},
+               "Asia/Dhaka", Stop(), Metrics())
+
+
+def test_without_the_setting_every_type_is_applied(registry, cfg):
+    sync = {k: v for k, v in cfg["sync"].items() if k != "operations"}
+    engine = Engine(registry, FakeReader(), FakeWriter(), FakeDlq(), sync, "Asia/Dhaka", Stop(), Metrics())
+    assert engine.operations == {"c", "u", "d", "r"}
+
+
+# ---------------------------------------------------------------- nested arrays (address, operator, nominee, doc)
+ADDRESS = '[{"address_id": 1, "village": "V", "district": "Dhaka", "create_date": "2020-01-01T00:00:00"}]'
+
+
+def customer_rows(*accounts, **fields):
+    return {(a,): {"ac_no": a, **fields} for a in accounts}
+
+
+def test_child_row_update_refreshes_only_its_array(configured):
+    engine, reader, writer, *_ = configured
+    reader.lookups[("a.ac_no", (("REF_NO", 5),))] = [("A1",), ("A2",)]
+    reader.rows["customer_data"] = customer_rows("A1", "A2", address=ADDRESS)
+    engine.process([change("MB_ADDRESS_MST", "u", {"REF_NO": "5", "VILLAGE": "old"}, {"REF_NO": "5", "VILLAGE": "V"})])
+    assert sorted((o.action, o.doc_id) for o in writer.ops) == [("update", "A1"), ("update", "A2")]
+    for op in writer.ops:
+        assert set(op.doc) == {"address"}                       # nothing else in the document is sent
+        assert op.doc["address"][0]["village"] == "V"           # parsed array, not a string
+        assert op.doc["address"][0]["create_date"].endswith("+06:00")   # nested date gets its offset
+
+
+def test_child_row_delete_refreshes_the_array_without_it(configured):
+    engine, reader, writer, *_ = configured
+    reader.lookups[("a.ac_no", (("REF_NO", 5),))] = [("A1",)]
+    reader.rows["customer_data"] = customer_rows("A1", address="[]")          # Oracle no longer has the row
+    engine.process([change("MB_ADDRESS_MST", "d", before={"REF_NO": "5", "ADDRESS_ID": "1"})])
+    assert [(o.action, o.doc_id, o.doc) for o in writer.ops] == [("update", "A1", {"address": []})]   # the element is gone
+
+
+def test_child_row_moved_to_another_parent_refreshes_both_arrays(configured):
+    engine, reader, writer, *_ = configured
+    reader.lookups[("a.ac_no", (("REF_NO", 5),))] = [("A1",)]
+    reader.lookups[("a.ac_no", (("REF_NO", 6),))] = [("A2",)]
+    reader.rows["customer_data"] = customer_rows("A1", "A2", address=ADDRESS)
+    engine.process([change("MB_ADDRESS_MST", "u", {"REF_NO": "5"}, {"REF_NO": "6"})])
+    assert sorted(o.doc_id for o in writer.ops) == ["A1", "A2"] and all(set(o.doc) == {"address"} for o in writer.ops)
+
+
+def test_dimension_rename_refreshes_the_address_array_of_every_customer_in_it(configured):
+    engine, reader, writer, *_ = configured
+    reader.lookups[("a.ac_no", (("DISTRICT_CODE", "01"),))] = [("A1",), ("A2",), ("A3",)]
+    reader.rows["customer_data"] = customer_rows("A1", "A2", "A3", address=ADDRESS)
+    engine.process([change("DISTRICT_INFO", "u", {"DISTRICT_CODE": "01", "DISTRICT_NAME": "Old"},
+                           {"DISTRICT_CODE": "01", "DISTRICT_NAME": "Dhaka"})])
+    assert sorted(o.doc_id for o in writer.ops if o.index == "customer_data") == ["A1", "A2", "A3"]
+    assert all(set(o.doc) == {"address"} for o in writer.ops if o.index == "customer_data")
+
+
+def test_operator_name_change_refreshes_the_operator_array_of_accounts_they_operate(configured):
+    engine, reader, writer, *_ = configured
+    reader.lookups[("op.cust_no", (("CUST_NO", 9),))] = [("A7",)]
+    reader.rows["customer_data"] = customer_rows("A7", operator='[{"ac_id": 1, "name": "New Name"}]')
+    engine.process([change("MB_CUSTOMER_MST", "u", {"CUST_NO": "9", "FIRST_NAME": "Old"}, {"CUST_NO": "9", "FIRST_NAME": "New"})])
+    ops = [o for o in writer.ops if o.index == "customer_data" and o.doc_id == "A7"]
+    assert ops and "operator" in ops[0].doc and ops[0].doc["operator"][0]["name"] == "New Name"
+
+
+def test_child_row_insert_does_not_touch_the_array_with_inserts_off(configured):
+    engine, reader, writer, _, metrics = configured
+    reader.lookups[("a.ac_no", (("REF_NO", 5),))] = [("A1",)]
+    reader.rows["customer_data"] = customer_rows("A1", address=ADDRESS)
+    engine.process([change("MB_ADDRESS_MST", "c", after={"REF_NO": "5", "ADDRESS_ID": "2"})])
+    assert not writer.ops and not reader.field_fetches

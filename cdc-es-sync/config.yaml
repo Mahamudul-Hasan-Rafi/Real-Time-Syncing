@@ -38,6 +38,11 @@ sync:
   throttle_ms: 200
   retry_max_backoff_seconds: 30
   nested_date_offset: "+06:00"          # added to dates inside JSON columns, as the Logstash pipelines do
+  # Change types that are applied. u = update, d = delete, c = insert, r = snapshot read. Events of any other type are
+  # still read and their offsets committed, but nothing is written (metric cdc_events_skipped_total{reason="operation_not_enabled"}).
+  # With inserts off, new rows (new transactions, new daily balances, new child rows) do not reach Elasticsearch through
+  # this service; add `c` to switch them back on.
+  operations: [u, d]
 
 observability:
   http_port: "${CDC_HTTP_PORT:9108}"    # /metrics and /health
@@ -355,6 +360,7 @@ indices:
   # ===============================================================================================
   ac_balance_data:
     target: default
+    reconcile_sum_field: balance       # total compared by the `reconcile` command
     es_index: ac_balance_data
     sql_file: sql/ac_balance_data.sql
     key_columns: [{col: ac_id, type: int}, {col: balance_date, type: date}]
@@ -472,6 +478,7 @@ indices:
   # ===============================================================================================
   transaction_history:
     target: default
+    reconcile_sum_field: amount       # total compared by the `reconcile` command
     es_index: transaction_history_
     sql_file: sql/transaction_history.sql
     key_columns: [{col: tran_id, type: int}]

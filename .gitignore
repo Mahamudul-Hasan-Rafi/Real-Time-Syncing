@@ -1,10 +1,16 @@
-# Logstash binary distribution (downloaded, bundled JDK)
-# Keep only config/ and pipeline/ (distribution is nested one level deep)
+# Logstash binary distribution (downloaded by scripts/setup.ps1 or setup.sh, bundled JDK).
+# Keep only our own files: config/, pipeline/ (the three load pipelines), templates/ (strict index mappings),
+# scripts/ and README_PIPELINES.md. The distribution is nested one level deep.
 Packages/cdc/elastic/logstash-8.4.3/*
 !Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/
 Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/*
 !Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/config/
 !Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/pipeline/
+!Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/templates/
+!Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/scripts/
+!Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/README_PIPELINES.md
+# The Logstash keystore holds the Oracle credentials: never commit it. Use environment variables or a .env file.
+Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/config/logstash.keystore
 
 Packages/cdc/elastic/*.zip
 Packages/cdc/elastic/*.tar.gz
@@ -22,7 +28,7 @@ __pycache__/
 node_modules/
 target/
 
-# Secrets
+# Secrets: copy the .env.example next to each .env and fill it in
 .env
 !.env.example
 

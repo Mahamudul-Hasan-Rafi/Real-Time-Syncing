@@ -91,6 +91,7 @@ class IndexCfg:
     nested_date_fields: dict
     etl_pipeline: str
     not_propagated: dict = field(default_factory=dict)
+    reconcile_sum_field: str | None = None      # numeric output field totalled by the `reconcile` command
 
     @property
     def key_types(self):
@@ -178,7 +179,10 @@ class Registry:
                 nested_date_fields=dict(c.get("nested_date_fields") or {}),
                 etl_pipeline=c.get("etl_pipeline", name),
                 not_propagated={k.upper(): v for k, v in (c.get("not_propagated") or {}).items()},
+                reconcile_sum_field=c.get("reconcile_sum_field"),
             )
+            if indices[name].reconcile_sum_field and indices[name].reconcile_sum_field not in select.names:
+                raise MappingError(f"{name}: reconcile_sum_field {c['reconcile_sum_field']} is not an output column")
         for name, c in cfg["indices"].items():
             ix = indices[name]
             for table, entries in (c.get("sources") or {}).items():

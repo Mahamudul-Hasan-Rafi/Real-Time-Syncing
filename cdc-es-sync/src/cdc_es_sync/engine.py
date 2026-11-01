@@ -17,6 +17,7 @@ from .transform import RejectError, build_document, build_partial, key_doc_id, n
 from .util import ShutdownRequested, backoff_delay
 
 log = logging.getLogger("engine")
+ALL_OPERATIONS = ("c", "u", "d", "r")
 _SEEN_CAP = 500_000      # bound on the per-batch "already rebuilt" memory
 
 
@@ -31,6 +32,11 @@ class Engine:
         self.throttle = float(sync_cfg.get("throttle_ms", 200)) / 1000
         self.max_backoff = float(sync_cfg.get("retry_max_backoff_seconds", 30))
         self.offset = sync_cfg.get("nested_date_offset", "+06:00")
+        # Which change types are applied: c insert, u update, d delete, r snapshot read. Others are read and skipped.
+        self.operations = frozenset(sync_cfg.get("operations") or ALL_OPERATIONS)
+        unknown = self.operations - set(ALL_OPERATIONS)
+        if unknown:
+            raise ValueError(f"sync.operations: unknown {sorted(unknown)}; use any of {list(ALL_OPERATIONS)}")
         self.tz = ZoneInfo(tz_name)
         self.stop = stop
         self.metrics = metrics
@@ -92,6 +98,9 @@ class Engine:
         plan = Plan()
         for change in changes:
             self.metrics.events.labels(change.table, change.op).inc()
+            if change.op not in self.operations:
+                self.metrics.skipped.labels("operation_not_enabled").inc()
+                continue
             try:
                 if not self.registry.route(change, plan):
                     self.metrics.skipped.labels("unmapped_table").inc()

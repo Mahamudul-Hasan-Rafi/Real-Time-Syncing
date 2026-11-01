@@ -3,10 +3,10 @@
   "config": {
     "connector.class": "io.debezium.connector.oracle.OracleConnector",
     "tasks.max": "1",
-    "database.hostname": "<ORACLE_HOST>",
-    "database.port": "1521",
+    "database.hostname": "${ORACLE_HOST}",
+    "database.port": "${ORACLE_PORT}",
     "database.user": "c##cdcuser",
-    "database.password": "<CDC_USER_PASSWORD>",
+    "database.password": "${CDC_USER_PASSWORD}",
     "database.dbname": "ORCLCDB",
     "database.pdb.name": "ORCLPDB1",
     "database.connection.adapter": "logminer",

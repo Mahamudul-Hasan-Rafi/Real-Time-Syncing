@@ -1,0 +1,602 @@
+{
+  "index_patterns": [
+    "customer_data"
+  ],
+  "priority": 200,
+  "version": 1,
+  "_meta": {
+    "description": "Managed by logstash-pipeline; schema is a strict contract with the SQL."
+  },
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 0,
+        "refresh_interval": "30s"
+      }
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "ac_create_by": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_nature": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_no": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_point_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_status": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_title": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "ac_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ac_type_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "account_nature": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "address": {
+          "properties": {
+            "address_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "address_type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "create_by": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "create_date": {
+              "type": "date"
+            },
+            "district": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "holding_no": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "post_code": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "road_no": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "union": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "upazilla": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "village": {
+              "type": "text",
+              "fields": {
+                "keyword": {
+                  "type": "keyword",
+                  "ignore_above": 256
+                }
+              }
+            },
+            "ward": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "agent_point_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "agn_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "alltrn": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "aml_sending_date": {
+          "type": "date"
+        },
+        "aml_sts": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "annual_income": {
+          "type": "scaled_float",
+          "scaling_factor": 1000
+        },
+        "area_name": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "branch_code": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "check_by": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "check_date": {
+          "type": "date"
+        },
+        "close_by": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "close_date": {
+          "type": "date"
+        },
+        "comp_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "con_isl": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "create_by": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "create_date": {
+          "type": "date"
+        },
+        "cust_code": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "cust_dob": {
+          "type": "date"
+        },
+        "cust_no": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "cust_status": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "cust_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "customer_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "daughter": {
+          "type": "long"
+        },
+        "debit_enable_by": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "debit_enable_date": {
+          "type": "date"
+        },
+        "dep_nature": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "doc": {
+          "properties": {
+            "create_by": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "create_date": {
+              "type": "date"
+            },
+            "document_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "document_no": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "document_type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "expire_date": {
+              "type": "date"
+            },
+            "issue_date": {
+              "type": "date"
+            },
+            "issue_place": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "economy_code": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "education": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "ekyc_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "etl_loaded_at": {
+          "type": "date"
+        },
+        "etl_pipeline": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "family_guardian": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "father_name": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "final_check": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "final_check_date": {
+          "type": "date"
+        },
+        "first_name": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "full_desc": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "gender": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "gendr": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "home_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "income_female": {
+          "type": "scaled_float",
+          "scaling_factor": 1000
+        },
+        "income_male": {
+          "type": "scaled_float",
+          "scaling_factor": 1000
+        },
+        "income_person": {
+          "type": "scaled_float",
+          "scaling_factor": 1000
+        },
+        "initial_amt": {
+          "type": "scaled_float",
+          "scaling_factor": 1000
+        },
+        "last_education": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "last_name": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "lien_mark": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "live_period": {
+          "type": "long"
+        },
+        "location_type": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "mail_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "mar_status": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "maritual_status": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "media": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "mobile_no": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "mother_name": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "nature": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "no_of_children": {
+          "type": "long"
+        },
+        "no_of_dependant": {
+          "type": "long"
+        },
+        "nominee": {
+          "properties": {
+            "ac_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "dob": {
+              "type": "date"
+            },
+            "docment_no": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "document_type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "father_name": {
+              "type": "text",
+              "fields": {
+                "keyword": {
+                  "type": "keyword",
+                  "ignore_above": 256
+                }
+              }
+            },
+            "mother_name": {
+              "type": "text",
+              "fields": {
+                "keyword": {
+                  "type": "keyword",
+                  "ignore_above": 256
+                }
+              }
+            },
+            "nom_percent": {
+              "type": "double"
+            },
+            "nom_type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "nominee_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "nominee_name": {
+              "type": "text",
+              "fields": {
+                "keyword": {
+                  "type": "keyword",
+                  "ignore_above": 256
+                }
+              }
+            },
+            "relation": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "occupation": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "occupation_code": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "open_date": {
+          "type": "date"
+        },
+        "operating_ins": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "operator": {
+          "properties": {
+            "ac_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "create_by": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "create_date": {
+              "type": "date"
+            },
+            "cust_no": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "inactive_by": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "inactive_date": {
+              "type": "date"
+            },
+            "name": {
+              "type": "text",
+              "fields": {
+                "keyword": {
+                  "type": "keyword",
+                  "ignore_above": 256
+                }
+              }
+            },
+            "status": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "opr_ins": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "other_bank": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "other_bank_acc_no": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "point_category": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "point_name": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "ref_agn": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "relation_with_guardian": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "religious_code": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "remark": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "review_status": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "sector_code": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "security_code": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "short_desc": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "son": {
+          "type": "long"
+        },
+        "spouse_name": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "src": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "tags": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "token_no": {
+          "type": "keyword",
+          "ignore_above": 1024
+        }
+      }
+    }
+  }
+}

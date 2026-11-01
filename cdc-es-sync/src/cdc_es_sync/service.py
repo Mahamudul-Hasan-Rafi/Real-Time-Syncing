@@ -20,6 +20,13 @@ from .util import ShutdownRequested, Stop
 log = logging.getLogger("service")
 
 
+def partition_lag(low: int, high: int, position: int, committed: int) -> int:
+    """Events not yet consumed. `position` is unknown (negative) until the first message of a partition arrives after
+    an assignment; then the group's committed offset is the truth, and only a group that never committed starts at `low`."""
+    start = position if position >= 0 else committed if committed >= 0 else low
+    return max(0, high - start)
+
+
 class Service:
     def __init__(self, cfg: dict, stop: Stop | None = None):
         self.cfg = cfg
@@ -221,8 +228,8 @@ class Service:
             for tp in consumer.assignment():
                 low, high = consumer.get_watermark_offsets(tp, timeout=5, cached=False)
                 pos = consumer.position([tp])[0].offset
-                lag = max(0, high - (pos if pos >= 0 else low))
-                self.metrics.lag.labels(tp.topic, str(tp.partition)).set(lag)
+                committed = consumer.committed([tp], timeout=5)[0].offset if pos < 0 else -1
+                self.metrics.lag.labels(tp.topic, str(tp.partition)).set(partition_lag(low, high, pos, committed))
         except Exception as exc:
             log.debug("lag check failed: %s", exc)
 

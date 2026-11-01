@@ -99,15 +99,18 @@ transaction that uses it, by document id.
 Files: `Dockerfile`, `docker-compose.yml`, `docker-compose.stack.yml` (optional), `requirements.lock` (exact versions).
 
 ```
-copy .env.example .env                 fill in ORACLE_USER / ORACLE_PASSWORD; set KAFKA_BOOTSTRAP / ES_URL / ORACLE_DSN if they differ
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }     never overwrite an existing .env (Linux: cp -n .env.example .env)
+edit .env:  ORACLE_USER, ORACLE_PASSWORD, KAFKA_BOOTSTRAP, ES_URL, ORACLE_DSN   (use the machine's IP, not localhost)
 docker compose build
-docker compose run --rm cdc-es-sync check       all start-up checks must pass
+docker compose run --rm cdc-es-sync check       all 9 start-up checks must PASS
+docker compose run --rm cdc-es-sync reconcile   Oracle vs Elasticsearch counts and totals: every index OK (after the initial load)
 docker compose up -d
 docker compose logs -f cdc-es-sync
 ```
 
 | Command | What it does |
 |---|---|
+| `docker compose run --rm cdc-es-sync reconcile` | Compares the document count and one amount total per index between Oracle and Elasticsearch (the document query itself is used on the Oracle side). Exit 1 on a mismatch. Run it when no changes are flowing, or allow for a few documents. |
 | `docker compose run --rm cdc-es-sync resync customer_data` | Rebuilds one index from Oracle (closes the gap before CDC started). |
 | `docker compose restart cdc-es-sync` | Reload `config.yaml` / `sql/` (they are mounted read-only into the container, so no rebuild is needed). |
 | `docker compose stop` | Sends SIGTERM; the batch in progress finishes and the consumer leaves its group (up to 60 s). |
@@ -140,7 +143,7 @@ cd /d D:\Kafka\cdc-es-sync
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 .venv\Scripts\python -m pip install -e .
-copy .env.example .env        and fill in ORACLE_USER / ORACLE_PASSWORD
+if not exist .env copy .env.example .env        and fill in ORACLE_USER / ORACLE_PASSWORD, KAFKA_BOOTSTRAP, ES_URL, ORACLE_DSN
 ```
 
 | Command (from the project folder, dev only; production uses Docker above) | What it does |
@@ -165,6 +168,7 @@ copy .env.example .env        and fill in ORACLE_USER / ORACLE_PASSWORD
 | `kafka.max_poll_interval_ms: 1800000` | A very large rebuild may keep the loop busy for minutes without being thrown out of the group. |
 | `oracle.timezone: Asia/Dhaka` | Oracle `DATE` has no zone. Dates are written as UTC ISO strings, as the Logstash pipelines do. |
 | `sync.nested_date_offset: +06:00` | Added to dates inside the JSON columns, as the Logstash `ruby` filter does. |
+| `sync.operations: [u, d]` | Change types that are applied: `u` update, `d` delete, `c` insert, `r` snapshot read. Other events are read and their offsets committed, but nothing is written; they are counted in `cdc_events_skipped_total{reason="operation_not_enabled"}`. Add `c` to apply inserts again. Leave the setting out to apply every type. |
 | `ORACLE_DSN`, `ES_URL`, `KAFKA_BOOTSTRAP`, `CDC_GROUP`, `CDC_HTTP_PORT` | Environment overrides. |
 
 `elasticsearch.targets` accepts several clusters; each index names its `target`.
@@ -200,7 +204,7 @@ columns changed.
 ## Tests
 
 ```
-.venv\Scripts\python -m pytest                       unit tests, no network (mapping, parsing, transform, engine)
+.venv\Scripts\python -m pytest                       unit tests, no network (mapping, field map audit, parsing, transform, engine, reconcile, lag)
 .venv\Scripts\python tests\live\parity.py 300        read-only: rebuilt documents vs the Logstash documents
 .venv\Scripts\python tests\live\lookup_crosscheck.py read-only: every lookup returns every dependent document
 .venv\Scripts\python tests\live\e2e.py               service must be running; makes real, reverted changes in dev
@@ -215,13 +219,17 @@ run at exit, so an aborted run still restores the data.
 
 | Test | Result |
 |---|---|
-| Unit tests | 46 passed |
-| `check` | 8 of 8 pass: Kafka, Elasticsearch, 3 indices, Oracle, 3 document queries, 21 lookup queries, log groups, mapping coverage |
+| Unit tests | 98 passed |
+| `check` | 9 of 9 pass: Kafka, Elasticsearch, 3 indices, Oracle, 3 document queries (in full and as field projections), 36 lookup queries, log groups, mapping coverage, field map audit |
 | Parity | 6,000 random documents (2,000 per index) rebuilt from Oracle: identical to the Logstash-loaded documents, including `_id` |
 | Parity, CDC-written documents only | 10,159 sampled of about 130,000 written by CDC: all identical to what Oracle produces now |
-| Lookup completeness | 22 lookup groups over real rows of every child and dimension table: every dependent document returned, none missing |
-| End-to-end, real changes | 24 scenarios, all pass (in the last full run 23 passed first time; `union` failed once because the test took its "before" snapshot from a search that was up to 30 s behind the previous scenario. The test now refreshes first, and `union` passed 6 more times, including back-to-back with the scenarios that share its documents): 17 updates (direct, child array element, composite date key, fan-out up to 23,367 documents), 7 insert/delete scenarios (transaction, balance with a new date, nominee, document, address, operator, account insert + key change + delete). Each change was reverted and the documents returned to their original content. Document counts unchanged. |
-| Fan-out speed | about 230 documents per second (23,367 documents in about 100 s each way) |
+| Lookup completeness | 33 lookup groups over real rows of every child and dimension table, for all three indices: every dependent document returned, none missing |
+| End-to-end, real changes (`e2e.py`) | 24 scenarios; in the latest run 23 passed and 1 was skipped ("account: update title" found no row with documents in all three indices; the same change passes in `field_e2e.py`). Document counts unchanged. Scenarios: 17 updates (direct, child array element, composite date key, fan-out up to 23,367 documents), 7 insert/delete scenarios (transaction, balance with a new date, nominee, document, address, operator, account insert + key change + delete). Each change was reverted and the documents returned to their original content. Document counts unchanged. |
+| Fan-out speed | Whole-document rebuilds: about 230 documents per second (23,367 documents in about 100 s each way). After the field-level update and a fix of the composite-key Oracle filter (500 balance documents took 4 s, now 0.2 s): about 2,700 documents per second, 68,000 documents in 25 s instead of 293 s |
+| Field-level updates, real changes (`field_e2e.py`) | 16 scenarios pass, e.g. a customer's `mobile_no` change reaches `customer_data` and `transaction_history_` (the new value, nothing else changed, `etl_loaded_at` untouched) and writes nothing to `ac_balance_data`; `mobile_no2` reaches transactions only; clearing a value to NULL; a column no index reads writes nothing; product, agent point, transaction code and occupation changes fan out to the right fields. Every change reverted to byte-identical documents |
+| Lookup completeness, all three indices | 33 lookup groups, 0 documents missing |
+| `reconcile` | all three indices OK |
+| Not re-run after the field-level change | The outage, crash, poison-event and replay tests above were run on the whole-document version; they exercise code that did not change (retry, dead letters, offsets), but they have not been repeated since. The fault harness also still assumes a host-run service and needs adapting to Docker |
 | Elasticsearch outage | Nothing applied while down, retries logged, everything applied 18 s after the link returned |
 | Oracle outage | Nothing applied while down, retries logged, everything applied after the link returned |
 | Kill -9 with changes waiting, and in the middle of a 3,176-document rebuild (killed at 500) | After restart all documents completed, no loss |
@@ -242,6 +250,10 @@ run at exit, so an aborted run still restores the data.
 
 ## Known limits
 
+* **Inserts are not applied** (`sync.operations: [u, d]`). New transactions, new daily balance rows and new child rows
+  (nominee, address, document, operator) do not reach Elasticsearch through this service until an update to the same
+  row makes the service write the document (a partial update of a missing document falls back to a whole rebuild), or
+  until you run `resync <index>` or load them another way. A new row that is deleted again never appears at all.
 * The `EMOB` schema has no primary keys, so a document key is the logical key (`AC_NO`, `TRAN_ID`, `AC_ID` + date).
   Duplicate logical keys in Oracle would collapse into one document, exactly as in the batch load.
 * CDC starts at the point Debezium's `snapshot.mode: no_data` started. Rows changed between the batch load and that

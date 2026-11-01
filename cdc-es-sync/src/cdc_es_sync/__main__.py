@@ -1,4 +1,4 @@
-"""Command line: python -m cdc_es_sync [--config config.yaml] run | check | resync <index>"""
+"""Command line: python -m cdc_es_sync [--config config.yaml] run | check | resync <index> | reconcile"""
 from __future__ import annotations
 
 import argparse
@@ -17,6 +17,7 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("run", help="consume change events and keep Elasticsearch in step")
     sub.add_parser("check", help="verify Kafka, Elasticsearch, Oracle, the SQL, logging groups and mapping coverage")
+    sub.add_parser("reconcile", help="compare document counts and amount totals between Oracle and Elasticsearch")
     rs = sub.add_parser("resync", help="rebuild every document of one index from Oracle")
     rs.add_argument("index")
     args = parser.parse_args(argv)
@@ -47,6 +48,11 @@ def main(argv=None) -> int:
         for name, ok, detail in results:
             print(f"{'PASS' if ok else 'FAIL'}  {name}: {detail}")
         return 0 if all(r[1] for r in results) else 1
+    if args.command == "reconcile":
+        from .reconcile import format_report, reconcile
+        rows, ok = reconcile(service.registry, service.reader, service.writer)
+        print(format_report(rows))
+        return 0 if ok else 1
     if args.command == "resync":
         if args.index not in service.registry.indices:
             print(f"unknown index {args.index}; known: {sorted(service.registry.indices)}", file=sys.stderr)

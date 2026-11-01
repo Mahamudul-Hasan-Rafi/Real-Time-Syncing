@@ -47,6 +47,7 @@ MISSING = object()
 # age: the balance query computes it from SYSDATE, so a rebuild after a birthday correctly shows a new value.
 IGNORE = {"etl_loaded_at", "etl_pipeline", "age"}
 CUSTOMER, BALANCE, TRAN = "customer_data", "ac_balance_data", "transaction_history_"
+OPERATIONS = set(cfg["sync"].get("operations") or "cudr")      # change types the service applies
 
 RESULTS = []
 REVERTS = []
@@ -464,7 +465,156 @@ def main():
     insert_delete_tests()
 
 
+def insert_ignored_test():
+    """config.yaml applies updates and deletes only: an inserted row must not create a document."""
+    name = "transaction: an inserted row is ignored (no document), its delete is harmless"
+    if not selected(name):
+        return
+    print(f"\n== {name}", flush=True)
+    for rowid, tran_id in q("SELECT rowid, tran_id FROM emob.mb_transaction_dtl SAMPLE (0.02) FETCH FIRST 30 ROWS ONLY"):
+        if mget(TRAN, [str(tran_id)])[str(tran_id)] is None:
+            continue
+        new_id = random.randint(900_000_000, 999_999_999)
+        count_before = client.count(index=TRAN)["count"]
+        undo = lambda n=new_id: dml("DELETE FROM emob.mb_transaction_dtl WHERE tran_id = :t", t=n)
+        REVERTS.append(("delete the cloned transaction row", undo))
+        try:
+            clone("mb_transaction_dtl", rowid, {"tran_id": new_id})
+        except oracledb.DatabaseError as exc:
+            REVERTS.pop()
+            record(name, "SKIP", f"database refused the clone ({str(exc).splitlines()[0]})")
+            return
+        appeared = wait_until(lambda: mget(TRAN, [str(new_id)])[str(new_id)] is not None, 40)
+        count_mid = client.count(index=TRAN)["count"]
+        undo()
+        REVERTS.pop()
+        time.sleep(30)               # long enough for Debezium to publish the delete and the service to read it
+        gone = mget(TRAN, [str(new_id)])[str(new_id)] is None
+        count_after = client.count(index=TRAN)["count"]
+        if appeared is not None:
+            record(name, "FAIL", "a document was created for the inserted row, but inserts are switched off")
+        elif not gone or count_mid != count_before or count_after != count_before:
+            record(name, "FAIL", f"counts {count_before} -> {count_mid} -> {count_after}")
+        else:
+            record(name, "PASS", f"no document appeared; counts stayed {count_before}", 1, 40, 30)
+        return
+    record(name, "SKIP", "no suitable row")
+
+
+def nested_scenario(name, table, pick_sql, id_col, array, parents_of, text_col, es_key, clone_where):
+    """Life of a nested array element when inserts are switched off. Only a CLONE of a child row is ever touched:
+         1. insert the clone                -> ignored: the parent documents do not change at all
+         2. update a text column of it      -> the array gains the element (the update refreshes it from Oracle)
+         3. update it again                 -> the element changes, the array keeps its size
+         4. delete the clone                -> the element disappears; the documents equal their original content
+       Everything else in the parent documents must stay byte-identical throughout."""
+    if not selected(name):
+        return
+    print(f"\n== {name}", flush=True)
+    M1, M2 = "E2E1", "E2E2"
+    for row in q(pick_sql):
+        rowid, accts = row[0], parents_of(row)
+        if not accts:
+            continue
+        before = mget(CUSTOMER, accts)
+        if any(d is None or not d.get(array) for d in before.values()):
+            continue
+        new_id = random.randint(900_000_000, 999_999_999)
+        overrides = {id_col: new_id} if id_col else {"create_by": "E2E"}
+        where, binds = clone_where(new_id, row)
+
+        def undo(where=where, binds=binds):
+            dml(f"DELETE FROM emob.{table} WHERE {where}", **binds)
+
+        def set_text(value, where=where, binds=binds):
+            dml(f"UPDATE emob.{table} SET {text_col} = :v WHERE {where}", v=value, **binds)
+
+        def others(doc):                        # everything except the array
+            return {k: v for k, v in strip(doc).items() if k != array}
+
+        def element_of(doc, marker):
+            return [x for x in doc[array] if x.get(es_key) == marker]
+
+        def without(doc, marker):
+            return [x for x in doc[array] if x.get(es_key) != marker]
+
+        REVERTS.append((f"delete the cloned {table} row", undo))
+        try:
+            clone(table, rowid, overrides)
+        except oracledb.DatabaseError as exc:
+            REVERTS.pop()
+            record(name, "SKIP", f"database refused the clone ({str(exc).splitlines()[0]})")
+            return
+        problems, t_total = [], time.time()
+
+        time.sleep(25)                                               # 1. the insert must change nothing
+        now = mget(CUSTOMER, accts)
+        if any(now[a] is None or strip(now[a]) != strip(before[a]) for a in accts):
+            problems.append("the inserted row changed a parent document, but inserts are switched off")
+
+        try:
+            set_text(M1)                                             # 2. update brings the element in
+            t2 = wait_until(lambda: all(len(mget(CUSTOMER, [a])[a][array]) == len(before[a][array]) + 1 for a in accts), 90)
+            now = mget(CUSTOMER, accts)
+            if t2 is None:
+                problems.append("the update of the cloned row did not add the element to the array")
+            else:
+                for a in accts:
+                    if len(element_of(now[a], M1)) != 1:
+                        problems.append(f"{a}: expected exactly one element with {es_key}={M1}")
+                    if without(now[a], M1) != before[a][array]:
+                        problems.append(f"{a}: the other elements of {array} changed")
+                    if others(now[a]) != others(before[a]):
+                        problems.append(f"{a}: fields outside {array} changed")
+
+            set_text(M2)                                             # 3. second update changes the element
+            t3 = wait_until(lambda: all(len(element_of(mget(CUSTOMER, [a])[a], M2)) == 1 for a in accts), 90)
+            now = mget(CUSTOMER, accts)
+            if t3 is None:
+                problems.append("the second update did not change the element")
+            elif any(len(now[a][array]) != len(before[a][array]) + 1 or element_of(now[a], M1) for a in accts):
+                problems.append("after the second update the array has the wrong size or still shows the old value")
+        except oracledb.DatabaseError as exc:
+            problems.append(f"database refused the test value: {str(exc).splitlines()[0]}")
+
+        undo()                                                       # 4. delete removes it again
+        REVERTS.pop()
+        t4 = wait_until(lambda: all(strip(mget(CUSTOMER, [a])[a]) == strip(before[a]) for a in accts), 90)
+        if t4 is None:
+            problems.append("after the delete the documents did not return to their original content")
+        record(name, "FAIL" if problems else "PASS", "; ".join(problems) or
+               f"{len(accts)} parent document(s): insert ignored, update added the element, 2nd update changed it, delete removed it",
+               len(accts), time.time() - t_total, 0)
+        return
+    record(name, "SKIP", "no suitable row")
+
+
 def insert_delete_tests():
+    if "c" not in OPERATIONS:
+        # The scenarios below insert a row and expect a document: they cannot pass with inserts switched off.
+        insert_ignored_test()
+        nested_scenario("nominee: nested element lifecycle with inserts off", "nominee_mst",
+                        "SELECT rowid, ac_id, nominee_id FROM emob.nominee_mst SAMPLE (2) FETCH FIRST 40 ROWS ONLY",
+                        "nominee_id", "nominee", lambda r: [a for a in [ac_no_of(r[1])] if a], "nominee_name", "nominee_name",
+                        lambda n, r: ("nominee_id = :n", {"n": n}))
+        nested_scenario("document: nested element lifecycle with inserts off", "mb_document_mst",
+                        "SELECT rowid, cust_no, document_id FROM emob.mb_document_mst SAMPLE (2) FETCH FIRST 40 ROWS ONLY",
+                        "document_id", "doc", lambda r: accounts_of_customer(r[1]), "issue_place", "issue_place",
+                        lambda n, r: ("document_id = :n", {"n": n}))
+        nested_scenario("address: nested element lifecycle with inserts off", "mb_address_mst",
+                        "SELECT rowid, ref_no, address_id FROM emob.mb_address_mst SAMPLE (2) FETCH FIRST 40 ROWS ONLY",
+                        "address_id", "address", lambda r: accounts_of_customer(r[1]), "village", "village",
+                        lambda n, r: ("address_id = :n", {"n": n}))
+        nested_scenario("operator: nested element lifecycle with inserts off", "mb_account_operator",
+                        "SELECT rowid, ac_id, cust_no FROM emob.mb_account_operator SAMPLE (5) FETCH FIRST 40 ROWS ONLY",
+                        None, "operator", lambda r: [a for a in [ac_no_of(r[1])] if a], "inactive_by", "inactive_by",
+                        lambda n, r: ("create_by = 'E2E' AND ac_id = :a", {"a": r[1]}))
+        for skipped in ("transaction: insert a row then delete it (document created, then removed)",
+                        "balance: insert a row for a new date then delete it (composite key)",
+                        "account: insert, change its account number (key change), delete"):
+            if selected(skipped):
+                record(skipped, "SKIP", "inserts are switched off in config.yaml (sync.operations)")
+        return
     name = "transaction: insert a row then delete it (document created, then removed)"
     if selected(name):
         print(f"\n== {name}", flush=True)
