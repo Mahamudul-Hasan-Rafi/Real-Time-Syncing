@@ -1,0 +1,13 @@
+.venv
+.git
+.env
+logs
+dlq
+tests
+scripts
+**/__pycache__
+**/*.pyc
+*.egg-info
+*.md
+docker-compose*.yml
+.dockerignore

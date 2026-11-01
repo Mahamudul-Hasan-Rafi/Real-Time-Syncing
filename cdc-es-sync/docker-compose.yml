@@ -1,0 +1,44 @@
+# cdc-es-sync service.
+#
+#   copy .env.example .env          (fill in ORACLE_USER / ORACLE_PASSWORD, adjust the addresses)
+#   docker compose build
+#   docker compose run --rm cdc-es-sync check        start-up checks; must pass before going live
+#   docker compose up -d
+#   docker compose logs -f cdc-es-sync
+#
+# Other commands (same image):
+#   docker compose run --rm cdc-es-sync resync customer_data     rebuild one index from Oracle
+#
+# Run ONE instance per consumer group. A second instance only works if you also raise the topics' partitions;
+# with the current single-partition topics it would sit idle until the first one stops.
+name: cdc-es-sync
+
+services:
+  cdc-es-sync:
+    build: .
+    image: era/cdc-es-sync:${CDC_ES_SYNC_VERSION:-1.0.0}
+    container_name: cdc-es-sync
+    restart: unless-stopped
+    init: true                          # reaps child processes and forwards SIGTERM
+    stop_grace_period: 60s              # SIGTERM: finish the current batch, leave the consumer group cleanly
+    env_file: .env                      # ORACLE_USER, ORACLE_PASSWORD and the optional overrides below
+    environment:
+      TZ: ${TZ:-Asia/Dhaka}
+    ports:
+      - "${METRICS_PORT:-9108}:9108"    # /health and /metrics (Prometheus)
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro     # the field map: edit, then `docker compose restart`
+      - ./sql:/app/sql:ro                     # the document queries (same SQL as the Logstash pipelines)
+      - cdc-logs:/app/logs
+      - cdc-dlq:/app/dlq                      # dead letters, only used if the Kafka dead letter topic is unreachable
+    cpus: 2
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+volumes:
+  cdc-logs:
+  cdc-dlq:

@@ -1,0 +1,24 @@
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+rules:
+  - pattern: 'kafka.server<type=(.+), name=(.+), clientId=(.+), topic=(.+), partition=(.*)><>Value'
+    name: kafka_server_$1_$2
+    type: GAUGE
+    labels: { clientId: "$3", topic: "$4", partition: "$5" }
+  - pattern: 'kafka.server<type=(.+), name=(.+), topic=(.+)><>(Count|OneMinuteRate)'
+    name: kafka_server_$1_$2_$4
+    type: GAUGE
+    labels: { topic: "$3" }
+  - pattern: 'kafka.server<type=(.+), name=(.+)><>(Count|OneMinuteRate|Value)'
+    name: kafka_server_$1_$2_$3
+    type: GAUGE
+  - pattern: 'kafka.controller<type=(.+), name=(.+)><>(Count|Value)'
+    name: kafka_controller_$1_$2_$3
+    type: GAUGE
+  - pattern: 'kafka.network<type=(.+), name=(.+)><>(Count|Value|Mean|99thPercentile)'
+    name: kafka_network_$1_$2_$3
+    type: GAUGE
+  - pattern: 'kafka.log<type=Log, name=(.+), topic=(.+), partition=(.+)><>Value'
+    name: kafka_log_$1
+    type: GAUGE
+    labels: { topic: "$2", partition: "$3" }

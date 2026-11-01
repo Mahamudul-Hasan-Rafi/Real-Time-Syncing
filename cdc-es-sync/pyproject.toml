@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cdc-es-sync"
+version = "1.0.0"
+description = "Keeps Elasticsearch documents in step with Oracle changes captured by Debezium in Kafka"
+requires-python = ">=3.10"
+dependencies = [
+    "confluent-kafka>=2.5",
+    "oracledb>=2.0",
+    "elasticsearch>=8.4,<9",
+    "PyYAML>=6",
+    "prometheus-client>=0.20",
+    "tzdata",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"

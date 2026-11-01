@@ -1,0 +1,31 @@
+# Node-wide settings. Per-pipeline sizing lives in pipelines.yml.
+node.name: logstash-emob-dev
+
+# Fixed port so monitoring calls do not depend on which port in 9600-9700 was free.
+api.http.host: 127.0.0.1
+api.http.port: 9600
+
+# Document IDs are deterministic, so order does not matter. Skips the ordering overhead.
+pipeline.ordered: false
+# Field names must match the strict index templates exactly.
+pipeline.ecs_compatibility: disabled
+# One log file per pipeline under logs/pipeline_<id>.log.
+pipeline.separate_logs: true
+
+# Durable buffer between the Oracle cursor and Elasticsearch.
+queue.type: persisted
+queue.max_bytes: 2gb
+# These pipelines read once and stop. Without this, events still queued at the end of the
+# read are left on disk undelivered while the process reports a normal shutdown.
+queue.drain: true
+
+# Events Elasticsearch rejects with 400/404 are kept instead of being dropped.
+dead_letter_queue.enable: true
+dead_letter_queue.max_bytes: 1gb
+
+log.level: info
+
+# Internal collection: pipeline metrics appear in Kibana > Stack Monitoring.
+xpack.monitoring.enabled: true
+xpack.monitoring.elasticsearch.hosts: ["${ES_HOSTS:http://10.11.200.109:9200}"]
+xpack.monitoring.collection.pipeline.details.enabled: true

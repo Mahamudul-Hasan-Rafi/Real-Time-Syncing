@@ -1,0 +1,18 @@
+# Optional: run next to the Kafka/Debezium stack in D:\Kafka\Packages\cdc and reach Kafka over its Docker network
+# (kafka:29092) instead of the host address. Oracle and Elasticsearch are still reached by their own addresses.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.stack.yml up -d
+#
+# STACK_NETWORK is the stack's default network: "<its compose project name>_default". The stack's folder is "cdc",
+# so it is cdc_default. Check with `docker network ls`.
+services:
+  cdc-es-sync:
+    environment:
+      KAFKA_BOOTSTRAP: kafka:29092
+    networks:
+      - stack
+
+networks:
+  stack:
+    name: ${STACK_NETWORK:-cdc_default}
+    external: true

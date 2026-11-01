@@ -1,0 +1,33 @@
+# Logstash binary distribution (downloaded, bundled JDK)
+# Keep only config/ and pipeline/ (distribution is nested one level deep)
+Packages/cdc/elastic/logstash-8.4.3/*
+!Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/
+Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/*
+!Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/config/
+!Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/pipeline/
+
+Packages/cdc/elastic/*.zip
+Packages/cdc/elastic/*.tar.gz
+
+# Archives and binaries
+*.zip
+*.tar.gz
+*.jar
+*.log
+
+# Python / Java / Node build artifacts
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+target/
+
+# Secrets
+.env
+!.env.example
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

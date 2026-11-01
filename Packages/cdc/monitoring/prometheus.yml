@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka-exporter:9308"]
+  - job_name: kafka-jmx
+    static_configs:
+      - targets: ["kafka:9404"]
+  - job_name: connect-jmx
+    static_configs:
+      - targets: ["connect:9404"]
+  - job_name: containers
+    static_configs:
+      - targets: ["cadvisor:8080"]
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

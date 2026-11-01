@@ -1,0 +1,173 @@
+# Full CDC stack: Kafka (KRaft) + Debezium Connect (Oracle) + Kafka UI + one-shot connector registration.
+# Usage: docker compose up -d --build      (Podman: podman compose up -d --build)
+# Podman cAdvisor paths: add  -f docker-compose.yml -f docker-compose.podman.yml
+# Override with env vars or a .env file: KAFKA_HOST, KAFKA_PORT, CONNECT_PORT, UI_PORT
+name: cdc
+
+services:
+  kafka:
+    build: ./dockerfiles/kafka
+    image: era/kafka-kraft:4.3.2
+    container_name: kafka
+    restart: unless-stopped
+    ports:
+      - "${KAFKA_PORT:-9222}:9222"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9222,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://${KAFKA_HOST:-10.11.200.109}:${KAFKA_PORT:-9222}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_LOG_RETENTION_HOURS: 72
+      KAFKA_HEAP_OPTS: -Xms2g -Xmx2g
+    cpus: 4
+    mem_limit: 8g
+    healthcheck:
+      test: ["CMD-SHELL", "KAFKA_OPTS= /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 40
+      start_period: 10s
+
+  connect:
+    build: ./dockerfiles/connect
+    image: era/debezium-connect-oracle:3.7.0
+    container_name: connect
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "${CONNECT_PORT:-8083}:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:29092
+      GROUP_ID: cdc-connect
+      CONFIG_STORAGE_TOPIC: connect_configs
+      OFFSET_STORAGE_TOPIC: connect_offsets
+      STATUS_STORAGE_TOPIC: connect_statuses
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      KAFKA_HEAP_OPTS: -Xms1g -Xmx3g
+    cpus: 3
+    mem_limit: 6g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf localhost:8083/ >/dev/null"]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+      start_period: 15s
+
+  # One-shot: registers the Debezium connector once Connect is healthy (skipped if it already exists).
+  connector-init:
+    image: era/debezium-connect-oracle:3.7.0
+    depends_on:
+      connect:
+        condition: service_healthy
+    restart: "no"
+    volumes:
+      - ./emob-oracle-connector.json:/tmp/connector.json:ro,z
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo "checking Oracle listener ${ORACLE_HOST:-10.11.200.37}:${ORACLE_PORT:-1521}"
+        if ! timeout 5 bash -c "echo > /dev/tcp/${ORACLE_HOST:-10.11.200.37}/${ORACLE_PORT:-1521}"; then
+          echo "ERROR: cannot reach Oracle - connector not registered" >&2
+          exit 1
+        fi
+        echo "Oracle reachable"
+        if curl -sf http://connect:8083/connectors/emob-oracle-cdc >/dev/null; then
+          echo "connector already registered"
+        else
+          curl -s -X POST -H 'Content-Type: application/json' --data @/tmp/connector.json http://connect:8083/connectors
+        fi
+        echo
+
+  kafka-ui:
+    build: ./dockerfiles/kafka-ui
+    image: era/kafka-ui:1.5.0
+    container_name: kafka-ui
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      connect:
+        condition: service_healthy
+    ports:
+      - "${UI_PORT:-8085}:8080"
+    environment:
+      JAVA_OPTS: -Xms256m -Xmx768m
+    cpus: 1
+    mem_limit: 1g
+
+  # ---- Optional monitoring: docker compose --profile monitoring up -d ----
+  kafka-exporter:
+    profiles: ["monitoring"]
+    image: docker.io/danielqsj/kafka-exporter:v1.8.0
+    restart: unless-stopped
+    command: ["--kafka.server=kafka:29092"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    cpus: 0.5
+    mem_limit: 256m
+
+  cadvisor:
+    profiles: ["monitoring"]
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    restart: unless-stopped
+    # Docker paths; on Podman add: -f docker-compose.podman.yml
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    cpus: 0.5
+    mem_limit: 512m
+
+  prometheus:
+    profiles: ["monitoring"]
+    image: docker.io/prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro,z
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    cpus: 1
+    mem_limit: 1g
+
+  grafana:
+    profiles: ["monitoring"]
+    image: docker.io/grafana/grafana:11.3.0
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-change-me}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro,z
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    cpus: 1
+    mem_limit: 1g
+
+volumes:
+  kafka-data:
+  prometheus-data:
+  grafana-data:

@@ -1,0 +1,10 @@
+# Podman override for cAdvisor (Podman stores containers under /var/lib/containers, not /var/lib/docker).
+# Usage: podman compose -f docker-compose.yml -f docker-compose.podman.yml --profile monitoring up -d
+# Rootful Podman is needed for cAdvisor to read container stats.
+services:
+  cadvisor:
+    volumes: !override
+      - /:/rootfs:ro
+      - /sys:/sys:ro
+      - /var/lib/containers/:/var/lib/containers:ro
+      - /run/podman/podman.sock:/var/run/docker.sock:ro

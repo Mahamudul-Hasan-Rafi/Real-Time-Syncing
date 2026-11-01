@@ -1,0 +1,17 @@
+# Exact runtime versions used and tested (Python 3.12). The Docker image installs these.
+# Regenerate after changing dependencies: pip freeze, minus pytest and its helpers.
+certifi==2026.10.23
+cffi==2.1.1
+confluent-kafka==2.16.1
+cryptography==50.0.2
+elastic-transport==8.19.0
+elasticsearch==8.19.3
+oracledb==26.1.0
+prometheus_client==0.26.0
+pycparser==3.12
+python-dateutil==3.0.0
+PyYAML==6.0.3
+six==1.17.0
+typing_extensions==4.16.0
+tzdata==2026.6
+urllib3==2.8.0

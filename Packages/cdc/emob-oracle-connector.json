@@ -1,0 +1,23 @@
+{
+  "name": "emob-oracle-cdc",
+  "config": {
+    "connector.class": "io.debezium.connector.oracle.OracleConnector",
+    "tasks.max": "1",
+    "database.hostname": "10.11.200.37",
+    "database.port": "1521",
+    "database.user": "c##cdcuser",
+    "database.password": "cdc_2026",
+    "database.dbname": "ORCLCDB",
+    "database.pdb.name": "ORCLPDB1",
+    "database.connection.adapter": "logminer",
+    "log.mining.strategy": "online_catalog",
+    "topic.prefix": "emob",
+    "table.include.list": "EMOB\\..*",
+    "snapshot.mode": "no_data",
+    "snapshot.locking.mode": "none",
+    "decimal.handling.mode": "string",
+    "include.schema.changes": "true",
+    "schema.history.internal.kafka.bootstrap.servers": "kafka:29092",
+    "schema.history.internal.kafka.topic": "schema-history.emob"
+  }
+}
