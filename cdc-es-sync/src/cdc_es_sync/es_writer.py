@@ -27,7 +27,10 @@ def make_client(target: dict, **kwargs) -> es.Elasticsearch:
     opts.setdefault("request_timeout", target.get("request_timeout", 120))
     if target.get("username"):
         opts["basic_auth"] = (target["username"], target.get("password", ""))
-    if target.get("ca_certs"):
+    if str(target.get("verify_certs", True)).strip().lower() in ("false", "0", "no"):
+        opts["verify_certs"] = False
+        opts["ssl_show_warn"] = False
+    elif target.get("ca_certs"):
         opts["ca_certs"] = target["ca_certs"]
     return es.Elasticsearch(target["hosts"], **opts)
 

@@ -31,6 +31,7 @@ elasticsearch:
       hosts: ["${ES_URL:https://10.11.200.109:9200}"]
       username: "${ES_USER:elastic}"
       password: "${ES_PASSWORD}"
+      verify_certs: "${ES_VERIFY_CERTS:false}"   # TEMPORARY: false skips certificate checks; set true to verify with ca_certs
       ca_certs: "${ES_CA_CERT:/app/certs/ca.crt}"   # the CA that signed the server certificate (Packages/cdc/elastic/ca/ca.crt)
       request_timeout: 120
 
