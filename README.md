@@ -153,14 +153,16 @@ docker compose -f Packages/cdc/docker-compose.yml up -d        # Podman: see bel
 curl -s http://localhost:8083/connectors/emob-oracle-cdc/status
 ```
 
-Podman has no `connector-init`, so use the override file and register the connector by hand:
+Podman: `docker-compose.podman.yml` only changes cAdvisor's paths (needed with `--profile monitoring`, rootful Podman), so
+`connector-init` still runs. If it fails, register the connector by hand:
 
 ```bash
-podman compose -f Packages/cdc/docker-compose.yml -f Packages/cdc/docker-compose.podman.yml up -d
+podman compose -f Packages/cdc/docker-compose.yml up -d
 set -a; . Packages/cdc/.env; set +a; export ORACLE_PORT=${ORACLE_PORT:-1521}
 envsubst < Packages/cdc/emob-oracle-connector.json | curl -X POST -H "Content-Type: application/json" --data @- http://localhost:8083/connectors
 ```
 
+With monitoring: `podman compose -f Packages/cdc/docker-compose.yml -f Packages/cdc/docker-compose.podman.yml --profile monitoring up -d`.
 If SELinux blocks a bind mount, the volume needs the `:Z` option.
 
 **4. Elasticsearch and Kibana**
