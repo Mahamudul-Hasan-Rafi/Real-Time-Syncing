@@ -52,11 +52,12 @@ Run everything from the repository root. Each step ends with how to see that it 
 
 ```powershell
 if (-not (Test-Path Packages/cdc/.env)) { Copy-Item Packages/cdc/.env.example Packages/cdc/.env }   # Linux: cp -n Packages/cdc/.env.example Packages/cdc/.env
-# edit Packages/cdc/.env: KAFKA_HOST (this machine's IP), ORACLE_HOST, CDC_USER_PASSWORD
+# edit Packages/cdc/.env: KAFKA_HOST (this machine's IP), ORACLE_HOST, CDC_USER_PASSWORD, KAFKA_UI_PASSWORD
 docker compose -f Packages/cdc/docker-compose.yml up -d
 ```
 
-`KAFKA_HOST` is required: compose stops with a clear message if it is empty. `connector-init` registers the Debezium
+`KAFKA_HOST` is required: compose stops with a clear message if it is empty. Kafka UI (http://localhost:8085) is protected by a
+login form: `KAFKA_UI_PASSWORD` is required, and the user name is `KAFKA_UI_USER` (default `admin`). `connector-init` registers the Debezium
 connector for you once Connect is healthy, filling `ORACLE_HOST` and `CDC_USER_PASSWORD` into the connector template, so
 there is nothing to edit in a tracked file.
 
@@ -148,7 +149,7 @@ cd ../../..
 
 ```bash
 cp -n Packages/cdc/.env.example Packages/cdc/.env
-# edit Packages/cdc/.env: KAFKA_HOST, ORACLE_HOST, CDC_USER_PASSWORD
+# edit Packages/cdc/.env: KAFKA_HOST, ORACLE_HOST, CDC_USER_PASSWORD, KAFKA_UI_PASSWORD
 docker compose -f Packages/cdc/docker-compose.yml up -d        # Podman: see below
 curl -s http://localhost:8083/connectors/emob-oracle-cdc/status
 ```

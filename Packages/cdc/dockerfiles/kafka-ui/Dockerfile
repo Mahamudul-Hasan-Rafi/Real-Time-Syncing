@@ -1,4 +1,4 @@
-# Web UI for the Kafka broker and the Debezium Kafka Connect cluster (no login, as requested).
+# Web UI for the Kafka broker and the Debezium Kafka Connect cluster. Login (AUTH_TYPE=LOGIN_FORM) is configured in docker-compose.yml.
 # Cluster addresses are the container names on the shared docker network (cdc-net).
 FROM docker.io/provectuslabs/kafka-ui:latest
 ENV KAFKA_CLUSTERS_0_NAME=era-cdc \
