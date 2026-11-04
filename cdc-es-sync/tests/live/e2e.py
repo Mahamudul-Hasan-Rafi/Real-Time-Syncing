@@ -22,13 +22,14 @@ import oracledb
 from elasticsearch import helpers
 
 from cdc_es_sync.config import load_config
+from cdc_es_sync.es_writer import make_client
 from cdc_es_sync.oracle_reader import OracleReader  # noqa: F401  (sets fetch_lobs default)
 from cdc_es_sync.transform import iso
 
 ROOT = Path(__file__).resolve().parents[2]
 cfg = load_config(ROOT / "config.yaml")
 TZ = ZoneInfo(cfg["oracle"]["timezone"])
-client = es.Elasticsearch(cfg["elasticsearch"]["targets"]["default"]["hosts"], request_timeout=300)
+client = make_client(cfg["elasticsearch"]["targets"]["default"], request_timeout=300)
 _count = client.count
 
 

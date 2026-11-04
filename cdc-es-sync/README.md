@@ -100,7 +100,7 @@ Files: `Dockerfile`, `docker-compose.yml`, `docker-compose.stack.yml` (optional)
 
 ```
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }     never overwrite an existing .env (Linux: cp -n .env.example .env)
-edit .env:  ORACLE_USER, ORACLE_PASSWORD, KAFKA_BOOTSTRAP, ES_URL, ORACLE_DSN   (use the machine's IP, not localhost)
+edit .env:  ORACLE_USER, ORACLE_PASSWORD, KAFKA_BOOTSTRAP, ES_URL (https), ES_PASSWORD, ORACLE_DSN   (use the machine's IP, not localhost)
 docker compose build
 docker compose run --rm cdc-es-sync check       all 9 start-up checks must PASS
 docker compose run --rm cdc-es-sync reconcile   Oracle vs Elasticsearch counts and totals: every index OK (after the initial load)
@@ -143,7 +143,7 @@ cd /d D:\Kafka\cdc-es-sync
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 .venv\Scripts\python -m pip install -e .
-if not exist .env copy .env.example .env        and fill in ORACLE_USER / ORACLE_PASSWORD, KAFKA_BOOTSTRAP, ES_URL, ORACLE_DSN
+if not exist .env copy .env.example .env        and fill in ORACLE_USER / ORACLE_PASSWORD, KAFKA_BOOTSTRAP, ES_URL, ES_PASSWORD, ES_CA_CERT, ORACLE_DSN
 ```
 
 | Command (from the project folder, dev only; production uses Docker above) | What it does |
@@ -170,6 +170,7 @@ if not exist .env copy .env.example .env        and fill in ORACLE_USER / ORACLE
 | `sync.nested_date_offset: +06:00` | Added to dates inside the JSON columns, as the Logstash `ruby` filter does. |
 | `sync.operations: [u, d]` | Change types that are applied: `u` update, `d` delete, `c` insert, `r` snapshot read. Other events are read and their offsets committed, but nothing is written; they are counted in `cdc_events_skipped_total{reason="operation_not_enabled"}`. Add `c` to apply inserts again. Leave the setting out to apply every type. |
 | `ORACLE_DSN`, `ES_URL`, `KAFKA_BOOTSTRAP`, `CDC_GROUP`, `CDC_HTTP_PORT` | Environment overrides. |
+| `ES_USER` (default `elastic`), `ES_PASSWORD`, `ES_CA_CERT` | Elasticsearch login and the CA file that signed its HTTPS certificate (`Packages/cdc/elastic/ca/ca.crt`; in Docker it is mounted at `/app/certs/ca.crt`, the default). `ES_PASSWORD` is required. Certificates are always verified. |
 
 `elasticsearch.targets` accepts several clusters; each index names its `target`.
 

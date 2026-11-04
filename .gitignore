@@ -32,6 +32,9 @@ target/
 .env
 !.env.example
 
+# Elasticsearch TLS: the CA certificate created by `Packages/cdc/elastic` (instance specific)
+Packages/cdc/elastic/ca/
+
 # IDE / OS
 .vscode/
 .idea/

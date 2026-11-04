@@ -21,12 +21,20 @@ class Op:
     key: tuple | None = None        # the document key, so a failed partial update can be rebuilt
 
 
+def make_client(target: dict, **kwargs) -> es.Elasticsearch:
+    """Client for one `elasticsearch.targets` entry: login (`username`/`password`) and the CA file (`ca_certs`) are optional."""
+    opts = dict(kwargs)
+    opts.setdefault("request_timeout", target.get("request_timeout", 120))
+    if target.get("username"):
+        opts["basic_auth"] = (target["username"], target.get("password", ""))
+    if target.get("ca_certs"):
+        opts["ca_certs"] = target["ca_certs"]
+    return es.Elasticsearch(target["hosts"], **opts)
+
+
 class EsWriter:
     def __init__(self, targets: dict, stop, metrics, max_backoff: float = 30.0, max_actions: int = 1000):
-        self.clients = {
-            name: es.Elasticsearch(t["hosts"], request_timeout=t.get("request_timeout", 120), max_retries=0)
-            for name, t in targets.items()
-        }
+        self.clients = {name: make_client(t, max_retries=0) for name, t in targets.items()}
         self.stop = stop
         self.metrics = metrics
         self.max_backoff = max_backoff

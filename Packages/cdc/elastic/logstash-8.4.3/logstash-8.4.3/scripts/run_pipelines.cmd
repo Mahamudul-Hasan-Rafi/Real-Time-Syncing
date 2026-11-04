@@ -3,7 +3,7 @@ rem Runs all three load pipelines from config\pipelines.yml. Logstash exits when
 rem   scripts\run_pipelines.cmd           run the pipelines
 rem   scripts\run_pipelines.cmd --test    validate the configs and exit
 rem
-rem ORACLE_USER, ORACLE_PASSWORD, ORACLE_JDBC_URL and ES_HOSTS are read from the environment, or from
+rem ORACLE_USER, ORACLE_PASSWORD, ORACLE_JDBC_URL, ES_HOSTS, ES_USER, ES_PASSWORD and ES_CA_CERT are read from the environment, or from
 rem Packages\cdc\elastic\.env if that file exists (copy .env.example there). Variables already set win.
 setlocal
 for %%I in ("%~dp0..") do set "LS_HOME=%%~fI"

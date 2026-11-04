@@ -28,7 +28,10 @@ oracle:
 elasticsearch:
   targets:
     default:
-      hosts: ["${ES_URL:http://10.11.200.109:9200}"]
+      hosts: ["${ES_URL:https://10.11.200.109:9200}"]
+      username: "${ES_USER:elastic}"
+      password: "${ES_PASSWORD}"
+      ca_certs: "${ES_CA_CERT:/app/certs/ca.crt}"   # the CA that signed the server certificate (Packages/cdc/elastic/ca/ca.crt)
       request_timeout: 120
 
 sync:

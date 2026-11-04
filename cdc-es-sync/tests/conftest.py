@@ -14,6 +14,7 @@ def cfg(monkeypatch_session=None):
     import os
     os.environ.setdefault("ORACLE_USER", "u")
     os.environ.setdefault("ORACLE_PASSWORD", "p")
+    os.environ.setdefault("ES_PASSWORD", "p")
     return load_config(ROOT / "config.yaml")
 
 

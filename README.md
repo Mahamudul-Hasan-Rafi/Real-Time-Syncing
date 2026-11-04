@@ -79,14 +79,20 @@ Podman: `docker-compose.podman.yml` has no `connector-init`; register by hand wi
 
 ```powershell
 if (-not (Test-Path Packages/cdc/elastic/.env)) { Copy-Item Packages/cdc/elastic/.env.example Packages/cdc/elastic/.env }
+# edit Packages/cdc/elastic/.env first: ES_PASSWORD, KIBANA_PASSWORD (no quotes, spaces or backslashes), ES_HOST_IP (this server's IP)
 docker compose -f Packages/cdc/elastic/docker-compose.yml up -d
-curl.exe -s "http://localhost:9200/_cluster/health?pretty"             # "status" : "green"
+curl.exe -s --ssl-no-revoke --cacert Packages/cdc/elastic/ca/ca.crt -u "elastic:<ES_PASSWORD>" "https://localhost:9200/_cluster/health?pretty"   # "status" : "green"
 ```
+
+Elasticsearch runs with security on: HTTPS plus a login. The first `up -d` creates a CA and server certificate and
+writes the public CA to `Packages/cdc/elastic/ca/ca.crt` (git-ignored); every client needs it. Log in to Kibana
+(`http://<host>:5601`) as `elastic` with `ES_PASSWORD`. If `ES_HOST_IP` changes, the certificate must be regenerated
+(`docker volume rm` the `es-certs` volume, then `up -d`).
 
 **5. Initial load with Logstash** (about 15 minutes for the dev data).
 
 ```powershell
-# edit Packages/cdc/elastic/.env: ORACLE_USER, ORACLE_PASSWORD (and ORACLE_JDBC_URL / ES_HOSTS if not the dev servers)
+# edit Packages/cdc/elastic/.env: ORACLE_USER, ORACLE_PASSWORD, ES_PASSWORD (and ORACLE_JDBC_URL / ES_HOSTS (https) if not the dev servers)
 cd Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1   # once: downloads Logstash 8.4.3 and the Oracle JDBC driver, verifies their checksums
 .\scripts\run_pipelines.cmd --test   # optional: validates the three pipelines
@@ -102,7 +108,8 @@ Linux/macOS: `scripts/setup.sh`, `scripts/run_pipelines.sh`. The three indices a
 ```powershell
 cd cdc-es-sync
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }     # never overwrite an existing .env
-# edit .env: ORACLE_USER, ORACLE_PASSWORD, KAFKA_BOOTSTRAP, ES_URL, ORACLE_DSN
+# edit .env: ORACLE_USER, ORACLE_PASSWORD, KAFKA_BOOTSTRAP, ES_URL (https), ES_PASSWORD, ORACLE_DSN
+# the CA is mounted from Packages/cdc/elastic/ca/ca.crt (override with ES_CA_FILE)
 docker compose build
 docker compose run --rm cdc-es-sync check        # 9 checks, all must PASS
 # docker compose run --rm cdc-es-sync reconcile    # Oracle vs Elasticsearch counts and totals: all OK
@@ -170,8 +177,9 @@ If SELinux blocks a bind mount, the volume needs the `:Z` option.
 
 ```bash
 cp -n Packages/cdc/elastic/.env.example Packages/cdc/elastic/.env
+# edit Packages/cdc/elastic/.env first: ES_PASSWORD, KIBANA_PASSWORD, ES_HOST_IP
 docker compose -f Packages/cdc/elastic/docker-compose.yml up -d
-curl -s "http://localhost:9200/_cluster/health?pretty"
+curl -s --cacert Packages/cdc/elastic/ca/ca.crt -u "elastic:<ES_PASSWORD>" "https://localhost:9200/_cluster/health?pretty"
 ```
 
 **5. Initial load with Logstash**
@@ -228,10 +236,13 @@ df -h /
 | Sync service `check` fails on Kafka / Elasticsearch | `localhost` inside a container is the container: use the machine's IP in `cdc-es-sync/.env`, or the Docker network (`docker-compose.stack.yml`). |
 | Logstash dies at once: `insufficient memory`, `paging file is too small` | The JVM could not reserve its 4 GB heap (`config/jvm.options`). Add `LS_JAVA_OPTS=-Xms1g -Xmx4g` to `Packages/cdc/elastic/.env` and run the load again. |
 | Elasticsearch exits at start | Not enough memory: lower `ES_HEAP` / `ES_MEM_LIMIT`; on Linux set `vm.max_map_count`. |
+| `required variable ES_PASSWORD` / `KIBANA_PASSWORD` / `ES_HOST_IP` is missing | Set it in `Packages/cdc/elastic/.env`. |
+| Elasticsearch client: `401` | Wrong `ES_PASSWORD`. Note the `elastic` password only applies on first start of an empty data volume; to change it later use `elasticsearch-reset-password -u elastic` inside the container. |
+| Elasticsearch client: certificate verify failed / hostname mismatch | Use the CA `Packages/cdc/elastic/ca/ca.crt`, and connect via a name or IP in the certificate (`localhost`, `elasticsearch`, `ES_HOST_IP`). Windows `curl.exe` also needs `--ssl-no-revoke`. |
 
 ## Notes
 
 - The Logstash program, its bundled JDK and the Oracle JDBC driver are not in the repository; `scripts/setup.*` downloads them.
 - Grafana's admin password defaults to `change-me`: set `GRAFANA_PASSWORD` in `Packages/cdc/.env`.
-- Elasticsearch runs with security disabled (plain HTTP, no login): keep its ports off untrusted networks.
+- Elasticsearch uses HTTPS and a login (`elastic` / `ES_PASSWORD`). Kibana itself is still plain HTTP, and Kafka Connect and Prometheus have no login: keep their ports off untrusted networks.
 - Logstash details: [README_PIPELINES.md](Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3/README_PIPELINES.md).

@@ -1,6 +1,6 @@
 # EMOB Oracle -> Elasticsearch pipelines
 
-Source: dev Oracle `10.11.200.37:1521/emob`. Target: Elasticsearch `http://10.11.200.109:9200` (no auth).
+Source: dev Oracle `10.11.200.37:1521/emob`. Target: Elasticsearch `https://10.11.200.109:9200` (password login, TLS; the CA is `Packages/cdc/elastic/ca/ca.crt`).
 
 | Pipeline | Config | Index | Document ID |
 |---|---|---|---|
@@ -22,7 +22,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1      once:
 ```
 
 Credentials and addresses come from the environment or from `Packages/cdc/elastic/.env` (copy `.env.example` there):
-`ORACLE_USER`, `ORACLE_PASSWORD`, and optionally `ORACLE_JDBC_URL` and `ES_HOSTS` (the defaults are the dev servers).
+`ORACLE_USER`, `ORACLE_PASSWORD`, `ES_PASSWORD` (the `elastic` user's password), and optionally `ORACLE_JDBC_URL`, `ES_HOSTS`, `ES_USER`
+and `ES_CA_CERT` (default `../../ca/ca.crt`, relative to the Logstash folder; the defaults are the dev servers).
 The check that the load is complete is `docker compose run --rm cdc-es-sync reconcile` in `cdc-es-sync/`
 (no Oracle client needed); `scripts\reconcile.ps1` does the same with `sqlplus` if you have it.
 

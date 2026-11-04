@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import elasticsearch as es
 
 from cdc_es_sync.config import load_config
+from cdc_es_sync.es_writer import make_client
 from cdc_es_sync.mapping import Registry, norm
 from cdc_es_sync.oracle_reader import OracleReader
 from cdc_es_sync.transform import build_document
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 cfg = load_config(ROOT / "config.yaml")
 reg = Registry.from_config(cfg)
 tz = ZoneInfo(cfg["oracle"]["timezone"])
-client = es.Elasticsearch(cfg["elasticsearch"]["targets"]["default"]["hosts"], request_timeout=120)
+client = make_client(cfg["elasticsearch"]["targets"]["default"], request_timeout=120)
 reader = OracleReader(cfg["oracle"])
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 200
 IGNORE = {"etl_loaded_at", "etl_pipeline"}

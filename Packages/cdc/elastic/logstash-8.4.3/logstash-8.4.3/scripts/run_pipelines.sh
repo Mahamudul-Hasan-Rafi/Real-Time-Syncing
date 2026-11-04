@@ -3,7 +3,7 @@
 #   scripts/run_pipelines.sh           run the pipelines
 #   scripts/run_pipelines.sh --test    validate the configs and exit
 #
-# ORACLE_USER, ORACLE_PASSWORD, ORACLE_JDBC_URL and ES_HOSTS are read from the environment, or from
+# ORACLE_USER, ORACLE_PASSWORD, ORACLE_JDBC_URL, ES_HOSTS, ES_USER, ES_PASSWORD and ES_CA_CERT are read from the environment, or from
 # Packages/cdc/elastic/.env if that file exists (copy .env.example there). Variables already set win.
 set -eu
 LS_HOME=$(cd "$(dirname "$0")/.." && pwd)

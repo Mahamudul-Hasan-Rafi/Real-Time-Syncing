@@ -29,6 +29,7 @@ services:
     volumes:
       - ./config.yaml:/app/config.yaml:ro     # the field map: edit, then `docker compose restart`
       - ./sql:/app/sql:ro                     # the document queries (same SQL as the Logstash pipelines)
+      - ${ES_CA_FILE:-../Packages/cdc/elastic/ca/ca.crt}:/app/certs/ca.crt:ro   # CA of the Elasticsearch certificate (created by the elastic stack's `certs` service)
       - cdc-logs:/app/logs
       - cdc-dlq:/app/dlq                      # dead letters, only used if the Kafka dead letter topic is unreachable
     cpus: 2

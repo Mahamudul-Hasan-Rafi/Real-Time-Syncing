@@ -27,5 +27,8 @@ log.level: info
 
 # Internal collection: pipeline metrics appear in Kibana > Stack Monitoring.
 xpack.monitoring.enabled: true
-xpack.monitoring.elasticsearch.hosts: ["${ES_HOSTS:http://10.11.200.109:9200}"]
+xpack.monitoring.elasticsearch.hosts: ["${ES_HOSTS:https://10.11.200.109:9200}"]
+xpack.monitoring.elasticsearch.username: "${ES_USER:elastic}"
+xpack.monitoring.elasticsearch.password: "${ES_PASSWORD}"
+xpack.monitoring.elasticsearch.ssl.certificate_authority: "${ES_CA_CERT:../../ca/ca.crt}"
 xpack.monitoring.collection.pipeline.details.enabled: true

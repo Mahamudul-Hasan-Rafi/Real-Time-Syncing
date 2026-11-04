@@ -163,7 +163,7 @@ def t_es_outage():
     print(f"\n== {name}", flush=True)
     rows = pick_rows(25)
     proxy = start_proxy(19200, "10.11.200.109", 9200)
-    start_service("es", {"ES_URL": "http://127.0.0.1:19200"})
+    start_service("es", {"ES_URL": "https://127.0.0.1:19200"})
     if wait_running() is None or not wait_assigned("es"):
         result(name, False, "service did not start or never received its partitions")
         return
