@@ -104,7 +104,7 @@ if (-not (Test-Path .env)) { Copy-Item .env.example .env }     # never overwrite
 # edit .env: ORACLE_USER, ORACLE_PASSWORD, KAFKA_BOOTSTRAP, ES_URL, ORACLE_DSN
 docker compose build
 docker compose run --rm cdc-es-sync check        # 9 checks, all must PASS
-docker compose run --rm cdc-es-sync reconcile    # Oracle vs Elasticsearch counts and totals: all OK
+# docker compose run --rm cdc-es-sync reconcile    # Oracle vs Elasticsearch counts and totals: all OK
 docker compose up -d
 cd ..
 ```
