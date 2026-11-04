@@ -120,6 +120,96 @@ powershell -NoProfile -ExecutionPolicy Bypass -File Packages/cdc/check-cdc.ps1  
 It checks the containers, the connector and its task, Elasticsearch health, that the three indices exist and hold
 documents, the sync service (`/health` and consumer lag) and free disk. Add `-SkipSync` before step 6.
 
+## Linux (Oracle Linux 8/9, RHEL family)
+
+The steps above are written for PowerShell. On Linux run the same steps from the repository root with the commands below.
+Oracle Linux ships Podman; use `podman compose` wherever `docker compose` appears (or install Docker CE).
+
+**Prerequisites (once)**
+
+```bash
+sudo dnf install -y git podman podman-compose curl gettext java-17-openjdk python3
+sudo sysctl -w vm.max_map_count=262144      # Elasticsearch; persist it in /etc/sysctl.d/99-elastic.conf
+sudo firewall-cmd --permanent --add-port={9222,8083,8085,9200,5601,9108}/tcp && sudo firewall-cmd --reload
+git clone https://github.com/Mahamudul-Hasan-Rafi/Real-Time-Syncing.git && cd Real-Time-Syncing
+```
+
+**1. Oracle** (DBA, on a host with SQL*Plus; remote: `sqlplus sys@//<ORACLE_HOST>:1521/ORCLCDB as sysdba`)
+
+```bash
+cd Packages/cdc/dba_scripts
+sqlplus / as sysdba @dba_cdc_01_check.sql
+sqlplus / as sysdba @dba_cdc_02_archivelog.sql      # enabling archive log mode restarts the database
+sqlplus / as sysdba @dba_cdc_03_cdc_setup.sql       # prompts for the CDC user's password
+cd ../../..
+```
+
+**2-3. Kafka, Connect, connector**
+
+```bash
+cp -n Packages/cdc/.env.example Packages/cdc/.env
+# edit Packages/cdc/.env: KAFKA_HOST, ORACLE_HOST, CDC_USER_PASSWORD
+docker compose -f Packages/cdc/docker-compose.yml up -d        # Podman: see below
+curl -s http://localhost:8083/connectors/emob-oracle-cdc/status
+```
+
+Podman has no `connector-init`, so use the override file and register the connector by hand:
+
+```bash
+podman compose -f Packages/cdc/docker-compose.yml -f Packages/cdc/docker-compose.podman.yml up -d
+set -a; . Packages/cdc/.env; set +a; export ORACLE_PORT=${ORACLE_PORT:-1521}
+envsubst < Packages/cdc/emob-oracle-connector.json | curl -X POST -H "Content-Type: application/json" --data @- http://localhost:8083/connectors
+```
+
+If SELinux blocks a bind mount, the volume needs the `:Z` option.
+
+**4. Elasticsearch and Kibana**
+
+```bash
+cp -n Packages/cdc/elastic/.env.example Packages/cdc/elastic/.env
+docker compose -f Packages/cdc/elastic/docker-compose.yml up -d
+curl -s "http://localhost:9200/_cluster/health?pretty"
+```
+
+**5. Initial load with Logstash**
+
+```bash
+# edit Packages/cdc/elastic/.env: ORACLE_USER, ORACLE_PASSWORD
+cd Packages/cdc/elastic/logstash-8.4.3/logstash-8.4.3
+sh scripts/setup.sh
+sh scripts/run_pipelines.sh --test
+sh scripts/run_pipelines.sh
+cd ../../../../..
+```
+
+**6. Sync service**
+
+```bash
+cd cdc-es-sync
+cp -n .env.example .env                           # then edit it
+docker compose build
+docker compose run --rm cdc-es-sync check
+docker compose run --rm cdc-es-sync reconcile
+docker compose up -d
+cd ..
+```
+
+Without containers: `python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt`, then
+`python -m cdc_es_sync check | reconcile | run` (`oracledb` runs in thin mode, no Oracle client needed).
+
+**7. Check the whole pipeline.** `check-cdc.ps1` is PowerShell only. Install PowerShell 7 (`sudo snap install powershell --classic`,
+or Microsoft's rpm repository) and run `pwsh -NoProfile -File Packages/cdc/check-cdc.ps1` (add `-SkipSync` before step 6).
+Without PowerShell, use these checks:
+
+```bash
+docker ps --format '{{.Names}}: {{.Status}}'
+curl -s http://localhost:8083/connectors/emob-oracle-cdc/status
+curl -s "http://localhost:9200/_cluster/health?pretty"
+for i in customer_data ac_balance_data transaction_history_; do echo -n "$i: "; curl -s "http://localhost:9200/$i/_count"; echo; done
+curl -s http://localhost:9108/health
+df -h /
+```
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
