@@ -74,7 +74,7 @@ Podman: `docker-compose.podman.yml` has no `connector-init`; register by hand wi
 `envsubst < Packages/cdc/emob-oracle-connector.json | curl -X POST -H "Content-Type: application/json" --data @- http://localhost:8083/connectors`
 (with `ORACLE_HOST`, `ORACLE_PORT` and `CDC_USER_PASSWORD` exported).
 
-**4. Start Elasticsearch and Kibana.**
+**4. Start Elasticsearch and Kibana. (If they don't exist)**
 
 ```powershell
 if (-not (Test-Path Packages/cdc/elastic/.env)) { Copy-Item Packages/cdc/elastic/.env.example Packages/cdc/elastic/.env }
