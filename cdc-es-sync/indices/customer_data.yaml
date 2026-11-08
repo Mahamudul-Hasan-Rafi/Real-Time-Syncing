@@ -1,0 +1,275 @@
+# Index definition: customer_data. The file name is the index's name in this service (`resync customer_data`).
+# The keys and the field map under `sources` are explained in docs/configuration.md.
+# `cdc-es-sync check` audits this file against customer_data.sql: every column the query reads must be listed under `sources`.
+
+target: default
+es_index: customer_data
+sql_file: customer_data.sql
+key_columns: [{col: ac_no, type: str}]
+key_filter: ["A.AC_NO"]
+doc_id: "{ac_no}"
+timestamp_field: create_date
+json_columns: [doc, address, operator, nominee]
+nested_date_fields:
+  doc: [issue_date, expire_date, create_date]
+  address: [create_date]
+  operator: [inactive_date, create_date]
+  nominee: [dob]
+etl_pipeline: cdc_customer_data
+reconcile_sum_field: initial_amt   # total compared by the `reconcile` command
+
+sources:
+  MB_ACCOUNT_MST:
+    - join: inner
+      direct: [AC_NO]
+      columns:
+        AC_NO: rebuild
+        AC_ID: rebuild
+        CUST_NO: rebuild
+        AC_TYPE_ID: rebuild
+        POINT_ID: rebuild
+        BRANCH_CODE: same
+        AC_TITLE: same
+        OPEN_DATE: same
+        CLOSE_DATE: same
+        ALLTRN: same
+        SECTOR_CODE: same
+        SECURITY_CODE: same
+        ECONOMY_CODE: same
+        COMP_TYPE: same
+        DEBIT_ENABLE_BY: same
+        DEBIT_ENABLE_DATE: same
+        INITIAL_AMT: same
+        AC_STATUS: same
+        CREATE_BY: [ac_create_by]
+        CREATE_DATE: same
+        FINAL_CHECK: same
+        FINAL_CHECK_DATE: same
+        AC_NATURE: [ac_nature, account_nature]
+        OPR_INS: [opr_ins, operating_ins]
+        CLOSE_BY: same
+        LIEN_MARK: same
+        EKYC_TYPE: same
+
+  MB_CUSTOMER_MST:
+    - join: inner                  # the customer's own accounts
+      params: {CUST_NO: int}
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_account_mst a
+        WHERE a.cust_no = :CUST_NO
+      columns:
+        CUST_NO: rebuild
+        AGENT_POINT_ID: rebuild
+        CUST_CODE: same
+        CUST_TYPE: [customer_type, cust_type]
+        FIRST_NAME: same
+        LAST_NAME: same
+        FATHER_NAME: same
+        MOTHER_NAME: same
+        CUST_DOB: same
+        GENDER: [gendr, gender]
+        MARITUAL_STATUS: [mar_status, maritual_status]
+        SPOUSE_NAME: same
+        NO_OF_CHILDREN: same
+        AML_STS: same
+        TOKEN_NO: same
+        AML_SENDING_DATE: same
+        NO_OF_DEPENDANT: same
+        MAIL_ID: same
+        OTHER_BANK: same
+        OTHER_BANK_ACC_NO: same
+        INCOME_PERSON: same
+        INCOME_MALE: same
+        INCOME_FEMALE: same
+        RELATION_WITH_GUARDIAN: same
+        CHECK_BY: same
+        CHECK_DATE: same
+        REMARK: same
+        SON: same
+        DAUGHTER: same
+        MOBILE_NO: same
+        RELIGIOUS_CODE: same
+        OCCUPATION_CODE: [occupation_code, occupation]
+        ANNUAL_INCOME: same
+        CUST_STATUS: same
+        MEDIA: same
+        LIVE_PERIOD: same
+        HOME_TYPE: same
+        LAST_EDUCATION: [last_education, education]
+        FAMILY_GUARDIAN: same
+        CREATE_BY: same
+        REVIEW_STATUS: same
+        AGN_TYPE: same
+        REF_AGN: same
+    - params: {CUST_NO: int}       # accounts where this customer is an operator (name shown in OPERATOR)
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_account_operator op
+        JOIN emob.mb_account_mst a ON a.ac_id = op.ac_id
+        WHERE op.cust_no = :CUST_NO
+      columns:
+        CUST_NO: [operator]
+        FIRST_NAME: [operator]
+        LAST_NAME: [operator]
+
+  MB_DOCUMENT_MST:
+    - params: {CUST_NO: int}
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_account_mst a
+        WHERE a.cust_no = :CUST_NO
+      columns:
+        CUST_NO: [doc]
+        DOCUMENT_ID: [doc]
+        DOCUMENT_TYPE: [doc]
+        DOCMENT_NO: [doc]
+        ISSUE_DATE: [doc]
+        ISSUE_PLACE: [doc]
+        EXPIRE_DATE: [doc]
+        CREATE_BY: [doc]
+        CREATE_DATE: [doc]
+
+  MB_ADDRESS_MST:
+    - params: {REF_NO: int}
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_account_mst a
+        WHERE a.cust_no = :REF_NO
+      columns:
+        REF_NO: [address]
+        ADDRESS_ID: [address]
+        ADDRESS_TYPE: [address]
+        DISTRICT_CODE: [address]
+        UPAZILA_CODE: [address]
+        UNION_CODE: [address]
+        POST_CODE: [address]
+        VILLAGE: [address]
+        WARD_NO: [address]
+        ROAD_NO: [address]
+        HOLDING_NO: [address]
+        CREATE_DATE: [address]
+        CREATE_BY: [address]
+
+  MB_ACCOUNT_OPERATOR:
+    - params: {AC_ID: int}
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_account_mst a
+        WHERE a.ac_id = :AC_ID
+      columns:
+        AC_ID: [operator]
+        CUST_NO: [operator]
+        STATUS: [operator]
+        CREATE_BY: [operator]
+        INACTIVE_BY: [operator]
+        INACTIVE_DATE: [operator]
+        CREATE_DATE: [operator]
+
+  NOMINEE_MST:
+    - params: {AC_ID: int}
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_account_mst a
+        WHERE a.ac_id = :AC_ID
+      columns:
+        AC_ID: [nominee]
+        NOMINEE_ID: [nominee]
+        NOMINEE_NAME: [nominee]
+        FATHER_NAME: [nominee]
+        MOTHER_NAME: [nominee]
+        RELATION: [nominee]
+        NOM_PERCENT: [nominee]
+        NOM_TYPE: [nominee]
+        DOCMENT_NO: [nominee]
+        DOB: [nominee]
+        DOCUMENT_TYPE: [nominee]
+
+  MB_PRODUCT_MST:
+    - join: inner
+      params: {AC_TYPE_ID: int}
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_account_mst a
+        WHERE a.ac_type_id = :AC_TYPE_ID
+      columns:
+        AC_TYPE_ID: rebuild
+        FULL_DESC: same
+        SHORT_DESC: same
+        DEP_NATURE: same
+        AC_TYPE: same
+        NATURE: same
+
+  # The query joins the point through the account point AND the customer agent point (superset on purpose).
+  ST_AGENT_POINT:
+    - join: outer
+      params: {POINT_ID: int}
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_account_mst a
+        JOIN emob.mb_customer_mst c ON c.cust_no = a.cust_no
+        WHERE a.point_id = :POINT_ID OR c.agent_point_id = :POINT_ID
+      columns:
+        POINT_ID: rebuild
+        POINT_NAME: same
+        AREA_NAME: same
+        POINT_CATEGORY_ID: [point_category]
+        LOCATION_TYPE: same
+
+  ST_POINT_CATEGORY:
+    - params: {POINT_CATEGORY_ID: int}
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_account_mst a
+        JOIN emob.mb_customer_mst c ON c.cust_no = a.cust_no
+        JOIN emob.st_agent_point f ON f.point_id = a.point_id OR f.point_id = c.agent_point_id
+        WHERE f.point_category_id = :POINT_CATEGORY_ID
+      columns:
+        POINT_CATEGORY_ID: [point_category]
+        CATEGORY_NAME: [point_category]
+
+  DISTRICT_INFO:                   # district name inside the ADDRESS array
+    - params: {DISTRICT_CODE: str}
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_address_mst ad
+        JOIN emob.mb_account_mst a ON a.cust_no = ad.ref_no
+        WHERE ad.district_code = :DISTRICT_CODE
+      columns:
+        DISTRICT_CODE: [address]
+        DISTRICT_NAME: [address]
+
+  UPAZILA_INFO:
+    - params: {DISTRICT_CODE: str, UPAZILA_CODE: str}
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_address_mst ad
+        JOIN emob.mb_account_mst a ON a.cust_no = ad.ref_no
+        WHERE ad.district_code = :DISTRICT_CODE AND ad.upazila_code = :UPAZILA_CODE
+      columns:
+        DISTRICT_CODE: [address]
+        UPAZILA_CODE: [address]
+        UPAZILA_NAME: [address]
+
+  UNION_INFO:
+    - params: {DISTRICT_CODE: str, UPAZILA_CODE: str, UNION_CODE: str}
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_address_mst ad
+        JOIN emob.mb_account_mst a ON a.cust_no = ad.ref_no
+        WHERE ad.district_code = :DISTRICT_CODE AND ad.upazila_code = :UPAZILA_CODE
+          AND ad.union_code = :UNION_CODE
+      columns:
+        DISTRICT_CODE: [address]
+        UPAZILA_CODE: [address]
+        UNION_CODE: [address]
+        UNION_NAME: [address]
+
+  STCODMAS:                        # occupation (OCC) and education (EDT) text of the customer
+    - params: {HARCOD: str, SOFCOD: str}
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_account_mst a
+        JOIN emob.mb_customer_mst c ON c.cust_no = a.cust_no
+        WHERE (:HARCOD = 'OCC' AND c.occupation_code = :SOFCOD)
+           OR (:HARCOD = 'EDT' AND c.last_education = :SOFCOD)
+      columns:
+        HARCOD: [occupation, education]
+        SOFCOD: [occupation, education]
+        CODDES: [occupation, education]
+
+  ST_OPERATING_INSTRUCTION:
+    - params: {OPR_INS: str}
+      sql: >-
+        SELECT a.ac_no FROM emob.mb_account_mst a
+        WHERE a.opr_ins = :OPR_INS
+      columns:
+        OPR_INS: [operating_ins]
+        INS_DESC: [operating_ins]

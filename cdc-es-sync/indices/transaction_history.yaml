@@ -1,0 +1,249 @@
+# Index definition: transaction_history. The file name is the index's name in this service (`resync transaction_history`).
+# The keys and the field map under `sources` are explained in docs/configuration.md.
+# `cdc-es-sync check` audits this file against transaction_history.sql: every column the query reads must be listed under `sources`.
+
+target: default
+es_index: transaction_history_
+sql_file: transaction_history.sql
+key_columns: [{col: tran_id, type: int}]
+key_filter: ["a.TRAN_ID"]
+doc_id: "{tran_id}"
+timestamp_field: create_date
+json_columns: []
+nested_date_fields: {}
+etl_pipeline: cdc_transaction_history
+reconcile_sum_field: amount       # total compared by the `reconcile` command
+
+# The Logstash load reads account, customer, product, point and code values as they are when it runs, so
+# these documents carry the CURRENT values. A change to any of them updates the affected fields of every
+# transaction that uses it (only those fields, by document id).
+sources:
+  MB_TRANSACTION_DTL:
+    - join: inner
+      direct: [TRAN_ID]
+      columns:
+        TRAN_ID: rebuild
+        AC_ID: rebuild
+        TRAN_CODE: rebuild
+        TRAN_POINT_ID: rebuild       # drives about 15 point fields
+        BAL_FLAG: same
+        BRANCH_CODE: same
+        CHARGE_FLAG: same
+        CHEQUE_DATE: same
+        CHEQUE_NO: same
+        CHEQUE_SERISE: same
+        CREATE_BY: same
+        CREATE_DATE: [tran_time, create_date]
+        DOC_DATE: same
+        DOC_NUM: same
+        DRCR_CODE: [drcr_code, dr_cr]
+        GLAC_ID: same
+        NARATION: same
+        REF_DOC_NO: same
+        REV_TRAN_ID: same
+        SL_NUM: same
+        TRANS_BRANCH_CODE: same
+        TRAN_AMT_LC: [amount]
+        TRAN_TYPE: [tran_type, type_desc]
+        VALUE_DATE: same
+
+  MB_ACCOUNT_MST:
+    - join: inner
+      params: {AC_ID: int}
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        WHERE t.ac_id = :AC_ID
+      columns:
+        AC_ID: rebuild
+        AC_TYPE_ID: rebuild
+        AC_NO: same
+        AC_STATUS: same
+        AC_TITLE: same
+        ALLTRN: same
+        CLOSE_DATE: same
+        EKYC_TYPE: same
+        FINAL_CHECK: same
+        FINAL_CHECK_BY: same
+        FINAL_CHECK_DATE: same
+        INI_CHECK: same
+        INI_CHECK_BY: same
+        INI_CHECK_DATE: same
+        OPEN_DATE: same
+        OPR_INS: same
+        SECTOR_CODE: same
+        VERIFY_BY: same
+        VERIFY_DATE: same
+        VERIFY_STATUS: same
+        CUST_NO: [cust_no, occupation, cust_status, cust_type, ref_agn, mobile_no, mobile_no2,
+                  aml_token_no, aml_sending_date, aml_status_update_date, aml_sts]
+        POINT_ID: [ac_point_id, ac_point_name, ac_point_category_id, ac_point_category, ac_point_district]
+
+  MB_CUSTOMER_MST:
+    - params: {CUST_NO: int}       # transactions of the customer's accounts
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        JOIN emob.mb_account_mst a ON a.ac_id = t.ac_id
+        WHERE a.cust_no = :CUST_NO
+      columns:
+        CUST_NO: [occupation, cust_status, cust_type, ref_agn, mobile_no, mobile_no2,
+                  aml_token_no, aml_sending_date, aml_status_update_date, aml_sts]
+        CUST_STATUS: same
+        CUST_TYPE: same
+        REF_AGN: same
+        MOBILE_NO: same
+        MOBILE_NO2: same
+        TOKEN_NO: [aml_token_no]
+        AML_SENDING_DATE: same
+        AML_STATUS_UPDATE_DATE: same
+        AML_STS: same
+        OCCUPATION_CODE: [occupation]
+    - params: {CUST_NO: int}       # transactions at points whose agent is this customer (AGENT_NAME)
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        JOIN emob.st_agent_point p ON p.point_id = t.tran_point_id
+        WHERE p.agent_id = :CUST_NO
+      columns:
+        CUST_NO: [agent_name]
+        FIRST_NAME: [agent_name]
+        LAST_NAME: [agent_name]
+
+  MB_PRODUCT_MST:
+    - join: inner
+      params: {AC_TYPE_ID: int}
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        JOIN emob.mb_account_mst a ON a.ac_id = t.ac_id
+        WHERE a.ac_type_id = :AC_TYPE_ID
+      columns:
+        AC_TYPE_ID: rebuild
+        AC_PREFIX: same
+        AC_TYPE: same
+        DEP_NATURE: same
+        FULL_DESC: [product_name]
+        SHORT_DESC: [short_name]
+
+  ST_TRANSACTION_CODE:
+    - join: inner
+      params: {TRAN_CODE: str}
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        WHERE t.tran_code = :TRAN_CODE
+      columns:
+        TRAN_CODE: rebuild
+        TRAN_DESC: same
+
+  ST_SECTOR_CODE:
+    - params: {SRLNO: str}
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        JOIN emob.mb_account_mst a ON a.ac_id = t.ac_id
+        WHERE a.sector_code = :SRLNO
+      columns:
+        SRLNO: [sector_code]
+        SECTOR_CODE: [sector_code]
+        SECTOR_DESC: [sector_code]
+
+  ST_AGENT_POINT:
+    - params: {POINT_ID: int}      # the point of the transaction's ACCOUNT (AC_POINT_*)
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        JOIN emob.mb_account_mst a ON a.ac_id = t.ac_id
+        WHERE a.point_id = :POINT_ID
+      columns:
+        POINT_ID: rebuild
+        POINT_NAME: [ac_point_name]
+        POINT_CATEGORY_ID: [ac_point_category_id, ac_point_category]
+        DISTRICT_CODE: [ac_point_district]
+    - params: {POINT_ID: int}      # the point where the transaction took place
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        WHERE t.tran_point_id = :POINT_ID
+      columns:
+        POINT_ID: rebuild
+        AGENT_ID: [agent_id, agent_name]
+        AGENT_MAIL_ID: same
+        AREA_NAME: same
+        DISTRICT_CODE: [point_district, point_upazilla, point_union]
+        LATITUDE: [lat]
+        LOCATION_TYPE: [loc_type, location_type]
+        LONGITUDE: [lng]
+        POINT_CATEGORY_ID: [point_category]
+        POINT_NAME: [point_name]
+        POST_CODE: same
+        STATUS: same
+        UNION_CODE: [point_union]
+        UPAZILA_CODE: [point_upazilla, point_union]
+
+  ST_POINT_CATEGORY:
+    - params: {POINT_CATEGORY_ID: int}      # category of the account point
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        JOIN emob.mb_account_mst a ON a.ac_id = t.ac_id
+        JOIN emob.st_agent_point p ON p.point_id = a.point_id
+        WHERE p.point_category_id = :POINT_CATEGORY_ID
+      columns:
+        POINT_CATEGORY_ID: [ac_point_category_id, ac_point_category]
+        CATEGORY_NAME: [ac_point_category]
+    - params: {POINT_CATEGORY_ID: int}      # category of the transaction point
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        JOIN emob.st_agent_point p ON p.point_id = t.tran_point_id
+        WHERE p.point_category_id = :POINT_CATEGORY_ID
+      columns:
+        POINT_CATEGORY_ID: [point_category]
+        CATEGORY_NAME: [point_category]
+
+  DISTRICT_INFO:
+    - params: {DISTRICT_CODE: str}          # district of the account point
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        JOIN emob.mb_account_mst a ON a.ac_id = t.ac_id
+        JOIN emob.st_agent_point p ON p.point_id = a.point_id
+        WHERE p.district_code = :DISTRICT_CODE
+      columns:
+        DISTRICT_CODE: [ac_point_district]
+        DISTRICT_NAME: [ac_point_district]
+    - params: {DISTRICT_CODE: str}          # district of the transaction point
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        JOIN emob.st_agent_point p ON p.point_id = t.tran_point_id
+        WHERE p.district_code = :DISTRICT_CODE
+      columns:
+        DISTRICT_CODE: [point_district]
+        DISTRICT_NAME: [point_district]
+
+  UPAZILA_INFO:
+    - params: {DISTRICT_CODE: str, UPAZILA_CODE: str}
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        JOIN emob.st_agent_point p ON p.point_id = t.tran_point_id
+        WHERE p.district_code = :DISTRICT_CODE AND p.upazila_code = :UPAZILA_CODE
+      columns:
+        DISTRICT_CODE: [point_upazilla]
+        UPAZILA_CODE: [point_upazilla]
+        UPAZILA_NAME: [point_upazilla]
+
+  UNION_INFO:
+    - params: {DISTRICT_CODE: str, UPAZILA_CODE: str, UNION_CODE: str}
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        JOIN emob.st_agent_point p ON p.point_id = t.tran_point_id
+        WHERE p.district_code = :DISTRICT_CODE AND p.upazila_code = :UPAZILA_CODE
+          AND p.union_code = :UNION_CODE
+      columns:
+        DISTRICT_CODE: [point_union]
+        UPAZILA_CODE: [point_union]
+        UNION_CODE: [point_union]
+        UNION_NAME: [point_union]
+
+  STCODMAS:                        # occupation text only (HARCOD = 'OCC')
+    - params: {HARCOD: str, SOFCOD: str}
+      sql: >-
+        SELECT t.tran_id FROM emob.mb_transaction_dtl t
+        JOIN emob.mb_account_mst a ON a.ac_id = t.ac_id
+        JOIN emob.mb_customer_mst c ON c.cust_no = a.cust_no
+        WHERE :HARCOD = 'OCC' AND c.occupation_code = :SOFCOD
+      columns:
+        HARCOD: [occupation]
+        SOFCOD: [occupation]
+        CODDES: [occupation]

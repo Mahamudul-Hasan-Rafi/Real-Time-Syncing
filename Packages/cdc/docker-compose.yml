@@ -118,6 +118,27 @@ services:
         fi
         echo "connector $$NAME registered"
 
+  # Kafka Connect never restarts a task that ended up FAILED, so this does. It calls only the restart endpoint (failed
+  # tasks only), up to MAX_ATTEMPTS times with growing waits, then writes the reason to ./watchdog-logs/watchdog-giveup.log
+  # and stops restarting. It never changes the connector config or offsets. Every action: ./watchdog-logs/watchdog.log
+  connector-watchdog:
+    image: era/debezium-connect-oracle:3.7.0
+    container_name: connector-watchdog
+    restart: unless-stopped
+    depends_on:
+      connect:
+        condition: service_healthy
+    environment:
+      CONNECT_URL: http://connect:8083
+      CONNECTOR_NAME: emob-oracle-cdc
+      MAX_ATTEMPTS: 10
+    volumes:
+      - ./watchdog/connector-watchdog.sh:/watchdog/connector-watchdog.sh:ro,z
+      - ./watchdog-logs:/logs:z
+    entrypoint: ["/bin/bash", "/watchdog/connector-watchdog.sh"]
+    cpus: 0.1
+    mem_limit: 64m
+
   kafka-ui:
     build: ./dockerfiles/kafka-ui
     image: era/kafka-ui:1.5.0

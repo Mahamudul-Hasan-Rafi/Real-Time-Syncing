@@ -25,6 +25,12 @@ Packages/cdc/elastic/*.tar.gz
 __pycache__/
 *.pyc
 .venv/
+*.egg-info/
+build/
+.benchmarks/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
 node_modules/
 target/
 

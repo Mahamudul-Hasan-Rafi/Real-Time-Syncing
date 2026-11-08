@@ -1,0 +1,119 @@
+# Index definition: ac_balance_data. The file name is the index's name in this service (`resync ac_balance_data`).
+# The keys and the field map under `sources` are explained in docs/configuration.md.
+# `cdc-es-sync check` audits this file against ac_balance_data.sql: every column the query reads must be listed under `sources`.
+
+target: default
+es_index: ac_balance_data
+sql_file: ac_balance_data.sql
+key_columns: [{col: ac_id, type: int}, {col: balance_date, type: date}]
+key_filter: ["B.AC_ID", "B.VALUE_DATE"]
+doc_id: "{ac_id}_{balance_date}"
+timestamp_field: balance_date
+json_columns: []
+nested_date_fields: {}
+etl_pipeline: cdc_ac_balance_data
+reconcile_sum_field: balance       # total compared by the `reconcile` command
+
+sources:
+  MB_ACCOUNT_DAILY_BALANCE:
+    - join: inner
+      direct: [AC_ID, VALUE_DATE]
+      columns:
+        AC_ID: rebuild
+        VALUE_DATE: rebuild
+        BALANCE: same
+
+  MB_ACCOUNT_MST:
+    - join: inner
+      params: {AC_ID: int}
+      sql: >-
+        SELECT b.ac_id, b.value_date FROM emob.mb_account_daily_balance b
+        WHERE b.ac_id = :AC_ID
+      columns:
+        AC_ID: rebuild
+        CUST_NO: rebuild
+        AC_TYPE_ID: rebuild
+        POINT_ID: rebuild
+        AC_NO: same
+        AC_TITLE: same
+        OPEN_DATE: same
+        CREATE_BY: same
+        CREATE_DATE: same
+
+  MB_CUSTOMER_MST:
+    - join: inner
+      params: {CUST_NO: int}
+      sql: >-
+        SELECT b.ac_id, b.value_date FROM emob.mb_account_daily_balance b
+        JOIN emob.mb_account_mst a ON a.ac_id = b.ac_id
+        WHERE a.cust_no = :CUST_NO
+      columns:
+        CUST_NO: rebuild
+        CUST_CODE: same
+        CUST_TYPE: same
+        CUST_DOB: [cust_dob, age]
+        GENDER: same
+        MARITUAL_STATUS: [mar_status]
+        OCCUPATION_CODE: [occupation]
+        LAST_EDUCATION: [education]
+
+  MB_PRODUCT_MST:
+    - join: inner
+      params: {AC_TYPE_ID: int}
+      sql: >-
+        SELECT b.ac_id, b.value_date FROM emob.mb_account_daily_balance b
+        JOIN emob.mb_account_mst a ON a.ac_id = b.ac_id
+        WHERE a.ac_type_id = :AC_TYPE_ID
+      columns:
+        AC_TYPE_ID: rebuild
+        FULL_DESC: [product]
+        DEP_NATURE: same
+
+  ST_AGENT_POINT:
+    - join: outer
+      params: {POINT_ID: int}
+      sql: >-
+        SELECT b.ac_id, b.value_date FROM emob.mb_account_daily_balance b
+        JOIN emob.mb_account_mst a ON a.ac_id = b.ac_id
+        WHERE a.point_id = :POINT_ID
+      columns:
+        POINT_ID: rebuild
+        POINT_NAME: same
+        POINT_CATEGORY_ID: [point_category]
+        LOCATION_TYPE: same
+        DISTRICT_CODE: [district]
+
+  ST_POINT_CATEGORY:
+    - params: {POINT_CATEGORY_ID: int}
+      sql: >-
+        SELECT b.ac_id, b.value_date FROM emob.mb_account_daily_balance b
+        JOIN emob.mb_account_mst a ON a.ac_id = b.ac_id
+        JOIN emob.st_agent_point pt ON pt.point_id = a.point_id
+        WHERE pt.point_category_id = :POINT_CATEGORY_ID
+      columns:
+        POINT_CATEGORY_ID: [point_category]
+        CATEGORY_NAME: [point_category]
+
+  DISTRICT_INFO:                   # district name of the account point
+    - params: {DISTRICT_CODE: str}
+      sql: >-
+        SELECT b.ac_id, b.value_date FROM emob.mb_account_daily_balance b
+        JOIN emob.mb_account_mst a ON a.ac_id = b.ac_id
+        JOIN emob.st_agent_point pt ON pt.point_id = a.point_id
+        WHERE pt.district_code = :DISTRICT_CODE
+      columns:
+        DISTRICT_CODE: [district]
+        DISTRICT_NAME: [district]
+
+  STCODMAS:
+    - params: {HARCOD: str, SOFCOD: str}
+      sql: >-
+        SELECT b.ac_id, b.value_date FROM emob.mb_account_daily_balance b
+        JOIN emob.mb_account_mst a ON a.ac_id = b.ac_id
+        JOIN emob.mb_customer_mst c ON c.cust_no = a.cust_no
+        WHERE (:HARCOD = 'OCC' AND c.occupation_code = :SOFCOD)
+           OR (:HARCOD = 'EDT' AND c.last_education = :SOFCOD)
+      columns:
+        HARCOD: [occupation, education]
+        SOFCOD: [occupation, education]
+        CODDES: [occupation, education]

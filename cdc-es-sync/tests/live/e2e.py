@@ -11,25 +11,25 @@ import random
 import sys
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 from zoneinfo import ZoneInfo
 
 import elasticsearch as es
 import oracledb
 from elasticsearch import helpers
 
-from cdc_es_sync.config import load_config
-from cdc_es_sync.es_writer import make_client
-from cdc_es_sync.oracle_reader import OracleReader  # noqa: F401  (sets fetch_lobs default)
-from cdc_es_sync.transform import iso
+from cdc_es_sync.connectors.elastic import make_client
+from cdc_es_sync.connectors.oracle import OracleReader  # noqa: F401  (sets fetch_lobs default)
+from cdc_es_sync.core.transform import iso
+from cdc_es_sync.settings import load_settings
 
 ROOT = Path(__file__).resolve().parents[2]
-cfg = load_config(ROOT / "config.yaml")
-TZ = ZoneInfo(cfg["oracle"]["timezone"])
-client = make_client(cfg["elasticsearch"]["targets"]["default"], request_timeout=300)
+cfg = load_settings(ROOT / "config.yaml")
+TZ = ZoneInfo(cfg.oracle.timezone)
+client = make_client(cfg.elasticsearch.targets["default"], request_timeout=300)
 _count = client.count
 
 
@@ -40,15 +40,15 @@ def _fresh_count(index=None, **kw):
 
 
 client.count = _fresh_count
-ora = cfg["oracle"]
-conn = oracledb.connect(user=ora["user"], password=ora["password"], dsn=ora["dsn"])
+ora = cfg.oracle
+conn = oracledb.connect(user=ora.user, password=ora.password, dsn=ora.dsn)
 ONLY = [a.lower() for a in sys.argv[1:]]
 MISSING = object()
 # etl_*: lineage fields change on purpose when CDC rebuilds a document.
 # age: the balance query computes it from SYSDATE, so a rebuild after a birthday correctly shows a new value.
 IGNORE = {"etl_loaded_at", "etl_pipeline", "age"}
 CUSTOMER, BALANCE, TRAN = "customer_data", "ac_balance_data", "transaction_history_"
-OPERATIONS = set(cfg["sync"].get("operations") or "cudr")      # change types the service applies
+OPERATIONS = set(cfg.sync.operations)      # change types the service applies
 
 RESULTS = []
 REVERTS = []

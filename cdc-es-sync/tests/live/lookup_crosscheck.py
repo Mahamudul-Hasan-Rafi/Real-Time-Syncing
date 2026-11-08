@@ -1,4 +1,4 @@
-"""Read-only completeness check of every lookup query in config.yaml.
+"""Read-only completeness check of every lookup query in the index files (indices/*.yaml).
 
 For real rows of each child/dimension table it works out which documents depend on that row (from the
 documents already in Elasticsearch, a source independent of the lookup SQL) and checks that the lookup
@@ -12,20 +12,20 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import elasticsearch as es
 from elasticsearch import helpers
 
-from cdc_es_sync.config import load_config
-from cdc_es_sync.es_writer import make_client
-from cdc_es_sync.mapping import Registry, norm
-from cdc_es_sync.oracle_reader import OracleReader
+from cdc_es_sync.connectors.elastic import make_client
+from cdc_es_sync.connectors.oracle import OracleReader
+from cdc_es_sync.core.keys import normalize_key as norm
+from cdc_es_sync.core.registry import Registry
+from cdc_es_sync.settings import load_settings
 
 ROOT = Path(__file__).resolve().parents[2]
-cfg = load_config(ROOT / "config.yaml")
-reg = Registry.from_config(cfg)
-tz = ZoneInfo(cfg["oracle"]["timezone"])
-client = make_client(cfg["elasticsearch"]["targets"]["default"], request_timeout=300)
-reader = OracleReader(cfg["oracle"])
+cfg = load_settings(ROOT / "config.yaml")
+reg = Registry.from_settings(cfg)
+tz = ZoneInfo(cfg.oracle.timezone)
+client = make_client(cfg.elasticsearch.targets["default"], request_timeout=300)
+reader = OracleReader(cfg.oracle)
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 150
 
 
@@ -105,13 +105,13 @@ for d in B:
 
 # ------------------------------------------------------------------------------- impact lookup by id
 impacts = {}
-for table, lst in reg.tables.items():
+for table, lst in reg.rules_by_table.items():
     for imp in lst:
         impacts[imp.id] = imp
 
 
 def find(table, index, n=0):
-    return [i for i in reg.tables[table] if i.index == index][n]
+    return [i for i in reg.rules_by_table[table] if i.index == index][n]
 
 
 results = []          # (label, rows checked, rows with missing docs, total expected, total missing, extras)

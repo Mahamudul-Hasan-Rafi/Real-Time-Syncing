@@ -1,0 +1,37 @@
+# Lint, type-check and unit-test cdc-es-sync, and prove the image builds. No access to Oracle, Kafka or Elasticsearch
+# is needed: the unit tests are offline (tests/live are run by hand against the dev systems).
+name: cdc-es-sync
+
+on:
+  push:
+    paths: ["cdc-es-sync/**", ".github/workflows/cdc-es-sync.yml"]
+  pull_request:
+    paths: ["cdc-es-sync/**", ".github/workflows/cdc-es-sync.yml"]
+
+defaults:
+  run:
+    working-directory: cdc-es-sync
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r requirements.lock && pip install -e ".[dev]"
+      - run: ruff check .
+      - run: mypy
+      - run: pytest -q
+
+  image:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t cdc-es-sync:ci .
+      - run: docker run --rm --entrypoint cdc-es-sync cdc-es-sync:ci --help

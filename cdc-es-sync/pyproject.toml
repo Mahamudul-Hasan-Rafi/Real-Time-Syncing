@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cdc-es-sync"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Keeps Elasticsearch documents in step with Oracle changes captured by Debezium in Kafka"
 requires-python = ">=3.10"
 dependencies = [
     "confluent-kafka>=2.5",
     "oracledb>=2.0",
+    # The Elasticsearch server is 8.4.3. The 9.x client sends headers an 8.x server rejects.
     "elasticsearch>=8.4,<9",
     "PyYAML>=6",
     "prometheus-client>=0.20",
@@ -17,12 +18,52 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.10", "types-PyYAML", "pre-commit>=3"]
+
+[project.scripts]
+cdc-es-sync = "cdc_es_sync.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "cdc_es_sync.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# -- tests ---------------------------------------------------------------------------------------------------------
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-testpaths = ["tests"]
+testpaths = ["tests/unit"]            # tests/live are scripts against the dev systems, run by hand
 addopts = "-p no:cacheprovider"
+
+# -- lint and format -----------------------------------------------------------------------------------------------
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "N"]
+ignore = [
+    "B905",     # zip() without strict=: the zipped sequences are built to the same length
+    "SIM108",   # ternaries are not always clearer
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/live/*" = ["B007", "B023", "E501", "E731", "F841", "N", "SIM"]   # operational scripts, kept as written
+"tests/unit/*" = ["E501", "SIM905"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["cdc_es_sync"]
+
+# -- types ---------------------------------------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.10"
+files = ["src"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = ["confluent_kafka.*", "oracledb.*"]
+ignore_missing_imports = true

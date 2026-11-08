@@ -20,19 +20,19 @@ from zoneinfo import ZoneInfo
 import elasticsearch as es
 import oracledb
 
-from cdc_es_sync.config import load_config
-from cdc_es_sync.es_writer import make_client
-from cdc_es_sync.mapping import Registry
-from cdc_es_sync.oracle_reader import OracleReader  # noqa: F401  (sets fetch_lobs default)
-from cdc_es_sync.transform import iso
+from cdc_es_sync.connectors.elastic import make_client
+from cdc_es_sync.connectors.oracle import OracleReader  # noqa: F401  (sets fetch_lobs default)
+from cdc_es_sync.core.registry import Registry
+from cdc_es_sync.core.transform import iso
+from cdc_es_sync.settings import load_settings
 
 ROOT = Path(__file__).resolve().parents[2]
-cfg = load_config(ROOT / "config.yaml")
-TZ = ZoneInfo(cfg["oracle"]["timezone"])
-registry = Registry.from_config(cfg)
-client = make_client(cfg["elasticsearch"]["targets"]["default"], request_timeout=300)
-ora = cfg["oracle"]
-conn = oracledb.connect(user=ora["user"], password=ora["password"], dsn=ora["dsn"])
+cfg = load_settings(ROOT / "config.yaml")
+TZ = ZoneInfo(cfg.oracle.timezone)
+registry = Registry.from_settings(cfg)
+client = make_client(cfg.elasticsearch.targets["default"], request_timeout=300)
+ora = cfg.oracle
+conn = oracledb.connect(user=ora.user, password=ora.password, dsn=ora.dsn)
 ONLY = [a.lower() for a in sys.argv[1:]]
 CUSTOMER, BALANCE, TRAN = "customer_data", "ac_balance_data", "transaction_history_"
 CAP = 6000                 # most documents one group may hold
@@ -325,7 +325,7 @@ def main():
 
 def unmapped_customer_column():
     """A VARCHAR2 column of MB_CUSTOMER_MST that no index reads (so changing it must write nothing)."""
-    mapped = {c for i in registry.tables["MB_CUSTOMER_MST"] for c in i.columns}
+    mapped = {c for i in registry.rules_by_table["MB_CUSTOMER_MST"] for c in i.columns}
     rows = q("SELECT column_name FROM all_tab_columns WHERE owner = 'EMOB' AND table_name = 'MB_CUSTOMER_MST' "
              "AND data_type = 'VARCHAR2' AND data_length >= 5 ORDER BY column_id")
     for (col,) in rows:

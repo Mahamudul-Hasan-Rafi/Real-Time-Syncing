@@ -5,6 +5,9 @@ logs
 dlq
 tests
 scripts
+docs
+.benchmarks
+.pre-commit-config.yaml
 **/__pycache__
 **/*.pyc
 *.egg-info

@@ -14,17 +14,16 @@ import time
 import urllib.request
 from pathlib import Path
 
-import e2e                      # reuses connections and helpers; its main() only runs under __main__
-from e2e import CUSTOMER, TRAN, client, dml, mget, q, wait_until, strip, REVERTS, run_reverts
-
+import e2e  # reuses connections and helpers; its main() only runs under __main__
 from confluent_kafka import Consumer, Producer, TopicPartition
+from e2e import CUSTOMER, REVERTS, TRAN, client, dml, mget, q, run_reverts, wait_until
 
 ROOT = Path(__file__).resolve().parents[2]
 PY = str(ROOT / ".venv" / "Scripts" / "python.exe")
 LOGS = ROOT / "logs"
 LOGS.mkdir(exist_ok=True)       # created on demand: the folder is not kept in the project
 ONLY = [a.lower() for a in sys.argv[1:]]
-KAFKA = e2e.cfg["kafka"]["bootstrap_servers"]
+KAFKA = e2e.cfg.kafka.bootstrap_servers
 RESULTS = []
 PROCS = []
 

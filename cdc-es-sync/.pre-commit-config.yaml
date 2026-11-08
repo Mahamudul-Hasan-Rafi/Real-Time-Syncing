@@ -1,0 +1,30 @@
+# pre-commit install        (once per clone; then these run on every commit)
+# pre-commit run --all-files
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+      - id: check-added-large-files
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff
+        entry: ruff check --fix
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy
+        entry: mypy
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: unit-tests
+        name: unit tests
+        entry: pytest -q
+        language: system
+        pass_filenames: false
+        types_or: [python, yaml, sql]

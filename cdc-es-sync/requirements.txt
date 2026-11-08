@@ -1,8 +1,0 @@
-confluent-kafka>=2.5
-oracledb>=2.0
-# The Elasticsearch server is 8.4.3. The 9.x client sends headers an 8.x server rejects.
-elasticsearch>=8.4,<9
-PyYAML>=6
-prometheus-client>=0.20
-tzdata
-pytest>=8

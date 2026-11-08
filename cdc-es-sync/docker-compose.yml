@@ -16,7 +16,7 @@ name: cdc-es-sync
 services:
   cdc-es-sync:
     build: .
-    image: era/cdc-es-sync:${CDC_ES_SYNC_VERSION:-1.0.0}
+    image: era/cdc-es-sync:${CDC_ES_SYNC_VERSION:-1.1.0}
     container_name: cdc-es-sync
     restart: unless-stopped
     init: true                          # reaps child processes and forwards SIGTERM
@@ -27,8 +27,8 @@ services:
     ports:
       - "${METRICS_PORT:-9108}:9108"    # /health and /metrics (Prometheus)
     volumes:
-      - ./config.yaml:/app/config.yaml:ro     # the field map: edit, then `docker compose restart`
-      - ./sql:/app/sql:ro                     # the document queries (same SQL as the Logstash pipelines)
+      - ./config.yaml:/app/config.yaml:ro     # runtime settings: edit, then `docker compose restart`
+      - ./indices:/app/indices:ro             # per index: field map (.yaml) and document query (.sql, same SQL as Logstash)
       - ${ES_CA_FILE:-../Packages/cdc/elastic/ca/ca.crt}:/app/certs/ca.crt:ro   # CA of the Elasticsearch certificate (created by the elastic stack's `certs` service)
       - cdc-logs:/app/logs
       - cdc-dlq:/app/dlq                      # dead letters, only used if the Kafka dead letter topic is unreachable
