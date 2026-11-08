@@ -21,7 +21,7 @@ oracle:
   dsn: "${ORACLE_DSN:(DESCRIPTION=(ENABLE=BROKEN)(RETRY_COUNT=3)(RETRY_DELAY=5)(TRANSPORT_CONNECT_TIMEOUT=10)(CONNECT_TIMEOUT=30)(ADDRESS=(PROTOCOL=TCP)(HOST=10.11.200.37)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=emob)))}"
   schema: EMOB
   pool_min: 1
-  pool_max: 4
+  pool_max: 8                           # at least sync.workers + 1 (the lookup cursor holds one connection)
   fetch_array_size: 1000
   call_timeout_ms: 300000
   timezone: Asia/Dhaka                  # Oracle DATE has no zone; the dev database runs at +06:00
@@ -39,8 +39,9 @@ elasticsearch:
 sync:
   chunk_size: 500                       # keys per Oracle round trip (IN lists stay far below the 1000 limit)
   bulk_max_actions: 1000
-  max_fanout: 50000                     # above this many keys from one change: warn and throttle between chunks
-  throttle_ms: 200
+  workers: 4                            # chunks refreshed in parallel; needs oracle.pool_max >= workers + 1
+  max_fanout: 50000                     # above this many keys from one change: log a warning
+  throttle_ms: 0                        # optional pause between chunks above max_fanout (0 = none; workers is the limit)
   retry_max_backoff_seconds: 30
   nested_date_offset: "+06:00"          # added to dates inside JSON columns, as the Logstash pipelines do
   # Change types that are applied. u = update, d = delete, c = insert, r = snapshot read. Events of any other type are

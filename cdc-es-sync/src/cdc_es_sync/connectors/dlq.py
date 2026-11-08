@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,9 +23,14 @@ class DeadLetterQueue:
         self.dir = Path(fallback_dir)
         self.metrics = metrics
         self.count = 0
+        self._lock = threading.Lock()       # the engine's workers may dead-letter at the same time
 
     def send(self, stage: str, reason: str, **detail: Any) -> None:
         """Records one item that could not be applied: to the topic, or to the fallback file if that fails."""
+        with self._lock:
+            self._send(stage, reason, detail)
+
+    def _send(self, stage: str, reason: str, detail: dict[str, Any]) -> None:
         record = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "stage": stage,

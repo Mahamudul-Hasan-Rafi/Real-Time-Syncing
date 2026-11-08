@@ -82,4 +82,4 @@ cli ──► app ──► pipeline ──► connectors ──► (confluent_k
 | Lookup rule | A SQL query, bound with event columns, returns the keys of the affected documents. |
 | Rebuild | Re-run the full document query for a key and index the whole document. |
 | Partial refresh | Re-run the query projected to some fields and send an `update` with only those fields. |
-| Fan-out | The number of documents one change affects through a lookup (throttled above `sync.max_fanout`). |
+| Fan-out | The number of documents one change affects through a lookup (logged above `sync.max_fanout`; its chunks run on `sync.workers` threads). |

@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+* A refused Elasticsearch login or permission (401/403) no longer drains the stream into the dead letter topic. Before,
+  the error was raised out of the writer, the batch was split, every event was dead-lettered as `processing` and the
+  offsets were committed, so a password change or a permission change silently emptied the topics into the DLQ. Now the
+  events wait and retry, nothing is committed, and the log says "refused access" at `ERROR`. The same applies to a
+  403 on a bulk item, which is how Elasticsearch reports an index it made read-only at the disk flood stage.
+* `/health` no longer turns 503 during a long Elasticsearch outage in which the service is correctly waiting: the
+  Elasticsearch retry wait now keeps the heartbeat, as the Oracle retry already did. A refused login deliberately does
+  not, so `/health` goes 503 after `health_stale_seconds` and a stuck service is noticed.
+
+### Changed
+* A large fan-out is processed by `sync.workers` threads (default 4) instead of one chunk at a time. Each worker reads
+  Oracle, builds the documents and sends its own bulk request, so Oracle, Python and Elasticsearch overlap; at most
+  2 x workers chunks are in flight. The sleep between chunks above `max_fanout` is off by default (`throttle_ms: 0`).
+  `oracle.pool_max` must be at least `workers + 1` (default raised from 4 to 8). The dead letter queue is now locked.
+
+### Added
+* 8 unit tests for the above (152 in total).
+
 ## 1.1.0 (2026-11-04)
 
 Restructuring for readability and verifiability; the sync behaviour is unchanged. Rationale and the full rename table:

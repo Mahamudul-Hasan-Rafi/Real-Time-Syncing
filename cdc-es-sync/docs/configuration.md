@@ -28,13 +28,14 @@ In Docker both are mounted read-only (`./config.yaml`, `./indices`): edit them a
 | `batch.max_events`, `batch.max_wait_seconds` | `500`, `1.0` | A batch is up to 500 events or 1 second. Duplicates inside a batch collapse. |
 | `oracle.user`, `oracle.password`, `oracle.dsn` | required | `ORACLE_USER`, `ORACLE_PASSWORD`, `ORACLE_DSN`. `ENABLE=BROKEN` in the DSN turns on TCP keepalive. |
 | `oracle.schema` | `EMOB` | Owner of the tables; used to find the tables a query reads and for the log group check. |
-| `oracle.pool_min`, `pool_max`, `fetch_array_size`, `call_timeout_ms` | `1`, `4`, `1000`, `300000` | Connection pool and statement limits. |
+| `oracle.pool_min`, `pool_max`, `fetch_array_size`, `call_timeout_ms` | `1`, `8`, `1000`, `300000` | Connection pool and statement limits. `pool_max` must be at least `sync.workers + 1`. |
 | `oracle.timezone` | `UTC` (config: `Asia/Dhaka`) | Oracle `DATE` has no zone. Dates are written as UTC ISO strings, as the Logstash pipelines do. |
 | `elasticsearch.targets.<name>` | at least one | `hosts`, `username` (`ES_USER`, default `elastic`), `password` (`ES_PASSWORD`), `verify_certs`, `ca_certs`, `request_timeout`. Each index names its `target`. |
 | `elasticsearch.targets.<name>.verify_certs` | `true` (config: `${ES_VERIFY_CERTS:false}`) | **Certificate checking is currently off** in `config.yaml`. Set `ES_VERIFY_CERTS=true` and `ES_CA_CERT` (in Docker `/app/certs/ca.crt`, mounted from `Packages/cdc/elastic/ca/ca.crt`) to verify. |
 | `sync.chunk_size` | `500` | Keys per Oracle query. IN lists stay well below Oracle's 1,000 limit. |
 | `sync.bulk_max_actions` | `1000` | Operations per Elasticsearch bulk request. |
-| `sync.max_fanout`, `sync.throttle_ms` | `50000`, `200` | When one change touches more than 50,000 documents, a warning is logged and the rebuild is throttled between chunks. It runs inline, so a crash re-reads the event and nothing is lost. |
+| `sync.workers` | `4` | Chunks of a rebuild or fan-out processed in parallel: each worker reads Oracle, builds the documents and sends its own bulk request. `1` processes chunks one after another. At most `2 x workers` chunks are in flight, which is what bounds the load on Oracle and Elasticsearch. |
+| `sync.max_fanout`, `sync.throttle_ms` | `50000`, `0` | When one change touches more than `max_fanout` documents a warning is logged. `throttle_ms` adds a pause between chunks above that size; `0` (default) means none, because `workers` is the limit. |
 | `sync.retry_max_backoff_seconds` | `30` | Cap of the exponential backoff for Oracle and Elasticsearch retries. |
 | `sync.nested_date_offset` | `+06:00` | Added to dates inside the JSON columns, as the Logstash `ruby` filter does. |
 | `sync.operations` | all of `c u d r` (config: `[u, d]`) | Change types that are applied: `u` update, `d` delete, `c` insert, `r` snapshot read. Other events are read and committed but nothing is written; they are counted in `cdc_events_skipped_total{reason="operation_not_enabled"}`. |
@@ -46,6 +47,8 @@ In Docker both are mounted read-only (`./config.yaml`, `./indices`): edit them a
 | `indices` | required | The index files to load, e.g. `- indices/customer_data.yaml`. Comment a line out to stop syncing that index. |
 
 ## Index files: `indices/<name>.yaml`
+
+A commented skeleton with a checklist is in [index-template.yaml](index-template.yaml); copy it when you add an index.
 
 The file name (without `.yaml`) is the index's name in this service: `resync customer_data`, metric labels, rule ids.
 

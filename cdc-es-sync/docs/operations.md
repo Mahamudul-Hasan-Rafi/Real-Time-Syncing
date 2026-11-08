@@ -42,6 +42,7 @@ so the new version continues where the old one stopped.
 | Situation | Behaviour |
 |---|---|
 | Elasticsearch down or slow (connection error, timeout, 429/502/503/504) | Retries with exponential backoff (max 30 s), forever. Consumption is paused, offsets are not committed, nothing is lost. |
+| Elasticsearch refuses access (401/403: wrong login, missing permission, or an index made read-only by the disk flood stage) | Waits and retries like an outage, forever: nothing is dead-lettered and no offset is committed. It logs at `ERROR` ("refused access") and does **not** refresh `/health`, so `/health` turns 503 after `health_stale_seconds`. Fix the login or permission, or free disk space on the cluster; restart the service after changing the password, because the login is read at start-up. |
 | Oracle down or connection lost | The whole batch is retried with backoff. Only connection-type errors are retried. |
 | An event that cannot be applied (malformed, key columns missing, SQL error) | The batch is split and processed event by event; the failing event goes to the dead letter topic and the rest continue. |
 | A row that cannot become a valid document (bad JSON column, empty key) | That document goes to the dead letter topic; the others in the batch are written. |
@@ -57,6 +58,8 @@ The dead letter topic is `cdc.es-sync.dlq`: JSON records with `ts`, `stage` (`pa
 ## Observability
 
 * `/health` returns 200 while the loop is alive (503 after `health_stale_seconds` without a heartbeat or in the failed state).
+  Waiting for an Elasticsearch or Oracle that is down or busy keeps the heartbeat, so a normal outage is not reported as
+  unhealthy. Being refused access by Elasticsearch does not, so a stuck service is visible.
 * `/metrics` is Prometheus text: `cdc_events_total{table,op}`, `cdc_events_skipped_total{reason}`,
   `cdc_docs_indexed_total{index}` (whole documents), `cdc_docs_updated_total{index}` (partial updates),
   `cdc_docs_deleted_total{index}`, `cdc_fanout_keys_total{index}`, `cdc_errors_total{stage}`, `cdc_dlq_total{stage}`,
@@ -87,5 +90,6 @@ changes only the fields it names, so `etl_loaded_at` keeps its value: it means "
   moment are not in Kafka; run `resync <index>` once to close that gap.
 * Lookups for `ST_AGENT_POINT` and `ST_POINT_CATEGORY` use an OR across the account point and the customer agent
   point, so a few more documents than strictly needed are refreshed. Harmless, and never misses one.
-* A single lookup that matches hundreds of thousands of documents runs for minutes. It is throttled and safe to
-  interrupt, but it blocks other events behind it.
+* A single lookup that matches hundreds of thousands of documents runs on `sync.workers` threads (about `workers` times
+  faster than one), and still blocks other events behind it. It is safe to interrupt. If Oracle or Elasticsearch
+  struggles, lower `sync.workers` or set `sync.throttle_ms`.

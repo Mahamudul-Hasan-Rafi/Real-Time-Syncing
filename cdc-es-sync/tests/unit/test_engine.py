@@ -1,4 +1,6 @@
 """Engine behaviour with fake Oracle and Elasticsearch."""
+import threading
+import time
 from dataclasses import replace
 from datetime import datetime
 
@@ -456,3 +458,81 @@ def test_child_row_insert_does_not_touch_the_array_with_inserts_off(configured):
     reader.rows["customer_data"] = customer_rows("A1", address=ADDRESS)
     engine.process([change("MB_ADDRESS_MST", "c", after={"REF_NO": "5", "ADDRESS_ID": "2"})])
     assert not writer.ops and not reader.field_fetches
+
+
+# ---------------------------------------------------------------- parallel chunks
+class SlowReader(FakeReader):
+    """Counts how many field reads run at the same time, so the test can see the chunks overlap."""
+
+    def __init__(self, delay=0.05):
+        super().__init__()
+        self.delay, self.running, self.peak = delay, 0, 0
+        self._lock = threading.Lock()
+
+    def fetch_fields(self, ix, keys, fields):
+        with self._lock:
+            self.running += 1
+            self.peak = max(self.peak, self.running)
+        try:
+            time.sleep(self.delay)
+            return super().fetch_fields(ix, keys, fields)
+        finally:
+            with self._lock:
+                self.running -= 1
+
+
+def fanout_engine(registry, settings, reader, workers, **kw):
+    return make_engine(registry, fast(settings.sync, operations=ALL_OPERATIONS, workers=workers, **kw), reader)
+
+
+def point_rename():
+    return change("ST_AGENT_POINT", "u", {"POINT_ID": "3", "POINT_NAME": "a"}, {"POINT_ID": "3", "POINT_NAME": "b"})
+
+
+def load_fanout(reader, n):
+    keys = [(f"A{i}",) for i in range(n)]
+    reader.lookups[("a.ac_no", (("POINT_ID", 3),))] = keys
+    reader.rows["customer_data"] = {k: {"ac_no": k[0], "point_name": "p"} for k in keys}
+    return keys
+
+
+def test_fanout_chunks_run_in_parallel_and_every_key_is_written_once(registry, settings):
+    reader = SlowReader()
+    keys = load_fanout(reader, 4000)                       # 8 chunks of 500
+    engine = fanout_engine(registry, settings, reader, workers=4)
+    engine.process([point_rename()])
+    written = [o.doc_id for o in engine.writer.ops if o.index == "customer_data"]
+    assert sorted(written) == sorted(k[0] for k in keys)   # none lost, none repeated
+    assert 1 < reader.peak <= 4                            # overlapped, never more than `workers`
+
+
+def test_one_worker_processes_chunks_one_after_another(registry, settings):
+    reader = SlowReader(delay=0.01)
+    load_fanout(reader, 2000)
+    fanout_engine(registry, settings, reader, workers=1).process([point_rename()])
+    assert reader.peak == 1
+
+
+def test_a_failure_in_a_worker_stops_the_batch_and_is_isolated_as_before(registry, settings):
+    reader = SlowReader(delay=0.01)
+    load_fanout(reader, 3000)
+    reader.fail_next = [ValueError("bad row")]             # one chunk fails with a non-transient error
+    engine = fanout_engine(registry, settings, reader, workers=4)
+    engine.process([point_rename()])                       # the single-event path dead-letters it, then it is done
+    assert engine.dlq.items and engine.dlq.items[0][0] == "processing"
+
+
+def test_stop_interrupts_a_parallel_fanout(registry, settings):
+    reader = SlowReader(delay=0.01)
+    load_fanout(reader, 5000)
+    engine = fanout_engine(registry, settings, reader, workers=4)
+    engine.stop.set()
+    with pytest.raises(ShutdownRequested):
+        engine.process([point_rename()])
+
+
+def test_workers_must_fit_in_the_connection_pool(settings):
+    with pytest.raises(ConfigError, match="pool_max"):
+        replace(settings, sync=replace(settings.sync, workers=settings.oracle.pool_max))
+    with pytest.raises(ConfigError, match="workers"):
+        replace(settings.sync, workers=0)

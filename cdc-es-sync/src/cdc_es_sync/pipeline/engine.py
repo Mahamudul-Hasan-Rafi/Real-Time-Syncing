@@ -8,7 +8,10 @@ matter. A key or join column change rebuilds the whole document; a key that Orac
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+import threading
+from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from functools import partial
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -42,6 +45,9 @@ class SyncEngine:
         self.chunk = sync.chunk_size
         self.max_fanout = sync.max_fanout
         self.throttle = sync.throttle_ms / 1000
+        self.workers = sync.workers
+        self._pool: ThreadPoolExecutor | None = None
+        self._seen_lock = threading.Lock()      # guards the per-batch `seen` sets, which the workers share
         self.max_backoff = sync.retry_max_backoff_seconds
         self.offset = sync.nested_date_offset
         # Which change types are applied: c insert, u update, d delete, r snapshot read. Others are read and skipped.
@@ -103,17 +109,54 @@ class SyncEngine:
     def _process_once(self, changes: list[Change]) -> None:
         plan = self._plan(changes)
         seen: Seen = {}
+        # Each step finishes before the next starts (a whole rebuild, then partial updates, then lookups), so two
+        # steps never write the same document at once; inside a step the chunks run in parallel.
         for index_name, keys in plan.rebuild.items():
-            self._refresh(index_name, sorted(keys, key=repr), seen)
+            self._run(partial(self._refresh, index_name, chunk, seen) for chunk in self._chunks(sorted(keys, key=repr)))
         for index_name, by_key in plan.partial.items():
             # one projected query per distinct field set, not per document
             groups: dict[frozenset[str], list[Key]] = {}
             for key, fields in by_key.items():
                 groups.setdefault(frozenset(fields), []).append(key)
             for field_set, group in groups.items():
-                self._refresh_fields(index_name, sorted(group, key=repr), field_set, seen)
+                self._run(partial(self._refresh_fields, index_name, chunk, field_set, seen)
+                          for chunk in self._chunks(sorted(group, key=repr)))
         for (_, params), pending in plan.lookups.items():
             self._expand(pending.rule, dict(params), pending.fields, seen)
+
+    def _chunks(self, keys: list[Key]) -> Iterator[list[Key]]:
+        for i in range(0, len(keys), self.chunk):
+            yield keys[i:i + self.chunk]
+
+    def _run(self, tasks: Iterable[Callable[[], Any]]) -> None:
+        """Runs the tasks on the worker pool and returns when all are done. Tasks are taken lazily and at most
+        2 x workers are in flight, so a lookup streaming 100,000 keys never holds more than a few chunks in memory.
+        The first failure cancels what has not started, waits for what has, and is raised: the caller retries the
+        batch, which is safe because every write is idempotent."""
+        if self.workers <= 1:
+            for task in tasks:
+                task()
+            return
+        if self._pool is None:
+            self._pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="cdc-worker")
+        in_flight: set[Future[Any]] = set()
+        try:
+            for task in tasks:
+                in_flight.add(self._pool.submit(task))
+                while len(in_flight) >= 2 * self.workers:
+                    done, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
+                    self._collect(done)
+            self._collect(wait(in_flight).done)
+            in_flight.clear()
+        finally:
+            for future in in_flight:
+                future.cancel()
+            wait(in_flight)
+
+    def _collect(self, done: Iterable[Future[Any]]) -> None:
+        for future in done:
+            future.result()
+        self.metrics.beat()
 
     def _plan(self, changes: list[Change]) -> ChangePlan:
         """Routes every event; duplicates collapse, so ten updates of one row cause one refresh."""
@@ -136,35 +179,43 @@ class SyncEngine:
     def _expand(self, rule: SourceRule, params: dict[str, Any], fields: set[str] | None, seen: Seen) -> None:
         """Runs one lookup query and refreshes the documents it returns, chunk by chunk."""
         spec = self.registry.indices[rule.index]
-        total, warned = 0, False
-        for raw in self.reader.lookup_chunks(rule.sql or "", params, self.chunk):
-            keys = []
-            for values in raw:
-                key = tuple(normalize_key(v, t) for v, t in zip(values, spec.key_types))
-                if all(v is not None for v in key):
-                    keys.append(key)
-            total += len(keys)
-            self.metrics.fanout.labels(rule.index).inc(len(keys))
-            if total > self.max_fanout:
-                if not warned:
-                    log.warning("large fan-out: %s for %s rebuilds more than %d documents; throttling",
-                                rule.id, params, self.max_fanout)
-                    warned = True
-                self.metrics.beat()
-                if self.stop.wait(self.throttle):
+        refresh = (partial(self._refresh, rule.index) if fields is None
+                   else partial(self._refresh_fields, rule.index, fields=fields))
+
+        def tasks() -> Iterator[Callable[[], Any]]:
+            # Runs in this thread: it reads the lookup cursor and hands one chunk of keys to a worker at a time.
+            total, warned = 0, False
+            for raw in self.reader.lookup_chunks(rule.sql or "", params, self.chunk):
+                keys = []
+                for values in raw:
+                    key = tuple(normalize_key(v, t) for v, t in zip(values, spec.key_types))
+                    if all(v is not None for v in key):
+                        keys.append(key)
+                total += len(keys)
+                self.metrics.fanout.labels(rule.index).inc(len(keys))
+                if total > self.max_fanout:
+                    if not warned:
+                        log.warning("large fan-out: %s for %s rebuilds more than %d documents (%d workers)",
+                                    rule.id, params, self.max_fanout, self.workers)
+                        warned = True
+                    if self.throttle and self.stop.wait(self.throttle):
+                        raise ShutdownRequested()
+                if self.stop.is_set():
                     raise ShutdownRequested()
-            if fields is None:
-                self._refresh(rule.index, keys, seen)
-            else:
-                self._refresh_fields(rule.index, keys, fields, seen)
+                yield partial(refresh, keys=keys, seen=seen)
+
+        self._run(tasks())
 
     def _refresh_fields(self, index_name: str, keys: list[Key], fields: Iterable[str], seen: Seen) -> None:
         """Updates only `fields` of the documents for these keys, with the current values from Oracle."""
         spec = self.registry.indices[index_name]
         wanted = sorted(fields)
-        rebuilt = seen.setdefault(index_name, set())
-        done = seen.setdefault((index_name, tuple(wanted)), set())
-        todo = [k for k in keys if k not in rebuilt and k not in done]
+        with self._seen_lock:       # claim the keys first, so a parallel worker never repeats them
+            rebuilt = seen.setdefault(index_name, set())
+            done = seen.setdefault((index_name, tuple(wanted)), set())
+            todo = [k for k in keys if k not in rebuilt and k not in done]
+            if len(done) < _SEEN_CAP:
+                done.update(todo)
         for i in range(0, len(todo), self.chunk):
             chunk = todo[i:i + self.chunk]
             present: set[Key] = set()
@@ -185,14 +236,15 @@ class SyncEngine:
             if missing:
                 log.info("%d %s documents were not in Elasticsearch; rebuilding them whole", len(missing), index_name)
                 self._refresh(index_name, missing, seen)
-            if len(done) < _SEEN_CAP:
-                done.update(chunk)
 
     def _refresh(self, index_name: str, keys: list[Key], seen: Seen) -> None:
         """Rebuilds the whole documents for these keys from the full document query."""
         spec = self.registry.indices[index_name]
-        done = seen.setdefault(index_name, set())
-        todo = [k for k in keys if k not in done]
+        with self._seen_lock:       # claim the keys first, so a parallel worker never repeats them
+            done = seen.setdefault(index_name, set())
+            todo = [k for k in keys if k not in done]
+            if len(done) < _SEEN_CAP:
+                done.update(todo)
         for i in range(0, len(todo), self.chunk):
             chunk = todo[i:i + self.chunk]
             present: set[Key] = set()
@@ -209,8 +261,6 @@ class SyncEngine:
                 ops.append(BulkOp("index", spec.es_index, doc_id, doc))
             ops.extend(self._deletes(spec, chunk, present))
             self._write(spec, ops)
-            if len(done) < _SEEN_CAP:
-                done.update(chunk)
 
     def _deletes(self, spec: IndexSpec, chunk: list[Key], present: set[Key]) -> list[BulkOp]:
         """A key Oracle no longer returns: its document is deleted."""

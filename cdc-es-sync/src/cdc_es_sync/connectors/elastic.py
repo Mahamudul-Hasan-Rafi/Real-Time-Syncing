@@ -14,6 +14,10 @@ from ..settings import ElasticsearchTarget
 
 log = logging.getLogger(__name__)
 _RETRY_STATUS = {429, 502, 503, 504}
+# A refused login or permission, or an index Elasticsearch made read-only (disk flood stage, reported as 403 per item).
+# Not a poison event: dead-lettering it would drain the whole stream and commit the offsets. The events wait instead,
+# and an operator can fix it without losing anything.
+_ACCESS_STATUS = {401, 403}
 
 
 @dataclass
@@ -90,19 +94,29 @@ class ElasticsearchWriter:
                     self._wait(attempt, f"Elasticsearch returned {exc.status_code}")
                     attempt += 1
                     continue
+                if exc.status_code in _ACCESS_STATUS:
+                    self._wait(attempt, f"Elasticsearch refused access ({exc.status_code})", healthy=False)
+                    attempt += 1
+                    continue
                 raise
             retry = []
+            refused = 0
             for op, item in zip(pending, result["items"]):
                 status_item = next(iter(item.values()))
                 status = status_item.get("status", 500)
                 if status < 300 or (op.action == "delete" and status == 404):
                     self._count(op)
-                elif status in _RETRY_STATUS:
+                elif status in _RETRY_STATUS or status in _ACCESS_STATUS:
                     retry.append(op)
+                    refused += status in _ACCESS_STATUS
                 else:
                     failed.append((op, str(status_item.get("error"))[:500]))
             if retry:
-                self._wait(attempt, f"{len(retry)} bulk items rejected with a retryable status")
+                if refused:
+                    self._wait(attempt, f"{refused} bulk items refused access (login, permission or read-only index)",
+                               healthy=False)
+                else:
+                    self._wait(attempt, f"{len(retry)} bulk items rejected with a retryable status")
                 attempt += 1
             pending = retry
         return failed
@@ -111,10 +125,15 @@ class ElasticsearchWriter:
         counter = {"index": self.metrics.indexed, "update": self.metrics.updated}.get(op.action, self.metrics.deleted)
         counter.labels(op.index).inc()
 
-    def _wait(self, attempt: int, why: str) -> None:
+    def _wait(self, attempt: int, why: str, healthy: bool = True) -> None:
+        """Sleeps before a retry. `healthy` says whether waiting is the normal reaction: a cluster that is down or busy
+        will come back by itself, so the heartbeat continues; being refused will not, so /health must go stale."""
         self.metrics.errors.labels("elasticsearch").inc()
+        if healthy:
+            self.metrics.beat()
         delay = backoff_delay(attempt, self.max_backoff)
-        log.warning("%s; retrying in %.1fs (attempt %d)", why, delay, attempt + 1)
+        log.log(logging.WARNING if healthy else logging.ERROR,
+                "%s; retrying in %.1fs (attempt %d)", why, delay, attempt + 1)
         if self.stop.wait(delay):
             raise ShutdownRequested()
 

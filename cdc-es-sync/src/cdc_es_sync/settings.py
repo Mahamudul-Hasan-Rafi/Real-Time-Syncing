@@ -51,7 +51,7 @@ class OracleSettings:
     dsn: str
     schema: str = "EMOB"
     pool_min: int = 1
-    pool_max: int = 4
+    pool_max: int = 8
     fetch_array_size: int = 1000
     call_timeout_ms: int = 300_000
     timezone: str = "UTC"                   # zone of Oracle DATE values (they carry none)
@@ -77,12 +77,15 @@ class SyncSettings:
     chunk_size: int = 500
     bulk_max_actions: int = 1000
     max_fanout: int = 50_000
-    throttle_ms: float = 200
+    throttle_ms: float = 0                  # optional pause between chunks above max_fanout
+    workers: int = 4                        # chunks refreshed in parallel (each: Oracle read, transform, bulk write)
     retry_max_backoff_seconds: float = 30.0
     nested_date_offset: str = "+06:00"
     operations: frozenset[str] = ALL_OPERATIONS
 
     def __post_init__(self) -> None:
+        if self.workers < 1:
+            raise ConfigError("sync.workers: must be at least 1 (1 processes chunks one after another)")
         unknown = self.operations - ALL_OPERATIONS
         if unknown:
             raise ConfigError(f"sync.operations: unknown {sorted(unknown)}; use any of {sorted(ALL_OPERATIONS)}")
@@ -124,6 +127,12 @@ class Settings:
     startup_checks: StartupCheckSettings
     indices: tuple[IndexDefinition, ...]
     base_dir: Path
+
+    def __post_init__(self) -> None:
+        # The lookup query keeps one connection open while the workers use the others.
+        if self.oracle.pool_max < self.sync.workers + 1:
+            raise ConfigError(f"oracle.pool_max ({self.oracle.pool_max}) must be at least sync.workers + 1 "
+                              f"({self.sync.workers + 1}), or the workers wait for connections")
 
 
 _SECTIONS = {
