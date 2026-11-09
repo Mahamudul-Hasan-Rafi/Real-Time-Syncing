@@ -1,0 +1,86 @@
+# TEMPLATE for a new index. Copy to indices/<name>.yaml, replace every <placeholder>, delete the comments you
+# no longer need, then add the file under `indices:` in config.yaml. It is NOT loaded from docs/.
+#
+# Order of work (details in docs/configuration.md):
+#   1. Write and test <name>.sql alone: one row per document, a WHERE clause, every table schema-qualified (EMOB.X).
+#   2. Fill the header. 3. One `sources` entry per table the SQL reads. 4. Run `cdc-es-sync check`.
+#   5. `resync <name>` once, change one value in each source table in dev, `reconcile`.
+#
+# Principles: the SQL is the truth and the YAML only routes. A lookup that returns too many documents is safe;
+# one that returns too few leaves documents stale. A key or join column is `rebuild`. All columns of a child table
+# that is shown as one JSON array feed that one field.
+
+target: default
+es_index: <elasticsearch_index_name>
+sql_file: <name>.sql
+
+# One entry per key column, in the order of the SQL's output. type: int | str | date.
+# Single key:     key_columns: [{col: ac_no, type: str}]                  key_filter: ["A.AC_NO"]
+# Composite key:  key_columns: [{col: ac_id, type: int}, {col: balance_date, type: date}]
+#                 key_filter:  ["B.AC_ID", "B.VALUE_DATE"]   (same count and order; put the most selective, indexed column first)
+key_columns: [{col: <key_output_column>, type: <int|str|date>}]
+key_filter: ["<ALIAS.KEY_COLUMN_AS_WRITTEN_IN_THE_SQL>"]
+doc_id: "{<key_output_column>}"          # composite: "{a}_{b}"; must match the ids the batch load wrote
+timestamp_field: <date_output_column>
+json_columns: []                         # output columns that hold JSON text (json_arrayagg ...)
+nested_date_fields: {}                   # e.g. { nominee: [dob] } dates inside those JSON columns
+etl_pipeline: cdc_<name>
+reconcile_sum_field: <numeric_output_column>     # compared by `reconcile`; leave out for a count-only check
+
+sources:
+  # ---- 1. The table the document is keyed on: `direct`, the key is in the event itself --------------------------
+  <MAIN_TABLE>:
+    - join: inner                        # the row decides whether the document exists
+      direct: [<KEY_COL_1>]              # composite: [<KEY_COL_1>, <KEY_COL_2>], same order as key_columns
+      columns:
+        <KEY_COL_1>: rebuild             # every direct column must be `rebuild`
+        <JOIN_COL>: rebuild              # a column the SQL joins on: its change moves the document
+        <PLAIN_COL>: same                # feeds the output field of the same name
+        <ODD_COL>: [<field_a>, <field_b>]  # feeds fields with other names, or several fields
+
+  # ---- 2. A table joined one-to-one into scalar columns: `params` + a lookup ------------------------------------
+  <PARENT_TABLE>:
+    - join: inner                        # inner: its row must exist for the document to exist; outer: it may be missing
+      params: {<BIND_COLUMN>: <int|str|date>}   # columns of THIS table's event, named exactly like the SQL binds
+      sql: >-
+        SELECT <ALL KEY COLUMNS, in key order> FROM EMOB.<main_table> m
+        WHERE m.<column> = :<BIND_COLUMN>
+      columns:
+        <BIND_COLUMN>: rebuild
+        <COL>: same
+
+  # ---- 3. A child table shown as a JSON array: every column feeds the ONE array field ---------------------------
+  <CHILD_TABLE>:
+    - params: {<PARENT_ID_COLUMN>: int}
+      sql: >-
+        SELECT <ALL KEY COLUMNS> FROM EMOB.<main_table> m
+        WHERE m.<parent_id> = :<PARENT_ID_COLUMN>
+      columns:
+        <PARENT_ID_COLUMN>: [<array_field>]
+        <COL_1>: [<array_field>]
+        <COL_2>: [<array_field>]
+
+  # ---- 4. A code / description table: one change can touch many documents (fan-out) -----------------------------
+  <CODE_TABLE>:
+    - params: {<CODE_COLUMN>: str}
+      sql: >-
+        SELECT <ALL KEY COLUMNS> FROM EMOB.<main_table> m
+        WHERE m.<code_column> = :<CODE_COLUMN>
+      columns:
+        <CODE_COLUMN>: [<field_that_shows_the_description>]
+        <DESCRIPTION_COLUMN>: [<field_that_shows_the_description>]
+
+  # ---- 5. The same table related in two ways: two rules, each with its own lookup and fields --------------------
+  # <TABLE>:
+  #   - { ...the first relationship... }
+  #   - { ...the second relationship... }
+
+# Checklist before you ship
+#   [ ] SQL returns one row per document and every table in it is written EMOB.<table>
+#   [ ] every table the SQL reads has a `sources` entry, and every column it reads is listed (`check` audits this)
+#   [ ] every `direct` and `params` column is in an ALWAYS supplemental log group in Oracle
+#   [ ] each lookup returns ALL key columns, in key order, and filters on an indexed column
+#   [ ] a lookup is never narrower than the SQL's own join (extra documents are fine, missing ones are not)
+#   [ ] join and key columns are `rebuild`; display columns are `same` or a field list
+#   [ ] doc_id gives the same ids as the batch load; `reconcile` counts match after `resync`
+#   [ ] the biggest fan-out (a code or product table) was tried once in dev and its time looked acceptable

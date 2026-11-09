@@ -19,7 +19,7 @@
   `oracle.pool_max` must be at least `workers + 1` (default raised from 4 to 8). The dead letter queue is now locked.
 
 ### Added
-* 8 unit tests for the above (152 in total).
+* 8 unit tests for the access handling and 6 for the parallel fan-out, including one that checks the 2 x workers read-ahead cap (158 in total).
 
 ## 1.1.0 (2026-11-04)
 

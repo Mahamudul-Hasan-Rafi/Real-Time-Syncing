@@ -536,3 +536,42 @@ def test_workers_must_fit_in_the_connection_pool(settings):
         replace(settings, sync=replace(settings.sync, workers=settings.oracle.pool_max))
     with pytest.raises(ConfigError, match="workers"):
         replace(settings.sync, workers=0)
+
+
+class CountingWriter(FakeWriter):
+    """Counts finished bulk writes: one per chunk, the last step of a chunk."""
+
+    def __init__(self):
+        super().__init__()
+        self.finished, self._lock = 0, threading.Lock()
+
+    def apply(self, target, ops):
+        failed = super().apply(target, ops)
+        with self._lock:
+            self.finished += 1
+        return failed
+
+
+class WatchedReader(SlowReader):
+    """Records how many chunks have been read from the lookup stream but not yet written."""
+
+    def __init__(self, writer, delay):
+        super().__init__(delay)
+        self.writer, self.produced, self.peak_outstanding = writer, 0, 0
+
+    def lookup_chunks(self, sql, params, chunk):
+        for part in super().lookup_chunks(sql, params, chunk):
+            self.produced += 1
+            self.peak_outstanding = max(self.peak_outstanding, self.produced - self.writer.finished)
+            yield part
+
+
+def test_the_lookup_stream_is_read_only_as_fast_as_the_workers_drain_it(registry, settings):
+    """Backpressure: never more than 2 x workers chunks are read ahead, however long the stream is."""
+    writer = CountingWriter()
+    reader = WatchedReader(writer, delay=0.03)
+    load_fanout(reader, 10_000)                                  # 20 chunks of 500
+    engine = make_engine(registry, fast(settings.sync, operations=ALL_OPERATIONS, workers=2), reader, writer)
+    engine.process([point_rename()])
+    assert reader.produced == 20 and writer.finished == 20
+    assert 2 < reader.peak_outstanding <= 4                      # the buffer is used, and the cap holds
