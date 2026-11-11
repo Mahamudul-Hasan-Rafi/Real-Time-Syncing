@@ -19,6 +19,7 @@ from .engine import SyncEngine
 log = logging.getLogger(__name__)
 
 LAG_INTERVAL_SECONDS = 15
+UNASSIGNED_TIMEOUT_SECONDS = 120
 
 
 class ChangeConsumer:
@@ -34,10 +35,11 @@ class ChangeConsumer:
     def run(self) -> None:
         """Consumes until stopped. Raises KafkaException on a fatal consumer error."""
         last_lag = 0.0
+        unassigned_since: float | None = time.monotonic()
         try:
             while not self.stop.is_set():
                 messages = self.collect()
-                self.metrics.beat()
+                unassigned_since = self._check_assignment(unassigned_since)
                 if messages:
                     self.handle(messages)
                 if time.time() - last_lag > LAG_INTERVAL_SECONDS:
@@ -45,6 +47,25 @@ class ChangeConsumer:
                     last_lag = time.time()
         except ShutdownRequested:
             log.info("shutdown requested; uncommitted events will be re-read on the next start")
+
+    def _check_assignment(self, unassigned_since: float | None) -> float | None:
+        """Fail a process that polls but never belongs to the group, so Docker can restart it.
+
+        librdkafka normally rejoins after a broker restart. If it remains detached, consume() can keep returning an
+        empty list forever; refreshing the ordinary heartbeat in that state made /health report a false positive.
+        """
+        now = time.monotonic()
+        if self.consumer.assignment():
+            self.metrics.beat()
+            return None
+        if unassigned_since is None:
+            unassigned_since = now
+        if now - unassigned_since >= UNASSIGNED_TIMEOUT_SECONDS:
+            self.metrics.beat("failed")
+            raise RuntimeError(
+                f"Kafka consumer has had no partition assignment for {UNASSIGNED_TIMEOUT_SECONDS}s; restarting"
+            )
+        return unassigned_since
 
     def collect(self) -> list[Message]:
         """Up to `batch.max_events` messages, or whatever arrived within `batch.max_wait_seconds`."""

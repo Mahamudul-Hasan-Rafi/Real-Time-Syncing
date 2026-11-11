@@ -1,5 +1,6 @@
 """The consume loop: offsets are committed only after a batch was applied (at-least-once)."""
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -33,10 +34,14 @@ class FakeMessage:
 class FakeKafka:
     def __init__(self):
         self.commits = []
+        self.partitions = [object()]
 
     def commit(self, offsets, asynchronous):
         assert asynchronous is False
         self.commits.append(sorted((tp.topic, tp.partition, tp.offset) for tp in offsets))
+
+    def assignment(self):
+        return self.partitions
 
 
 class FakeEngine:
@@ -93,3 +98,17 @@ def test_tombstones_are_committed_without_calling_the_engine():
     consumer, kafka, _ = loop()
     consumer.handle([FakeMessage(None, offset=5)])
     assert consumer.engine.batches == [] and kafka.commits[0][0][2] == 6
+
+
+def test_assignment_watchdog_allows_an_assigned_consumer():
+    consumer, _, _ = loop()
+    assert consumer._check_assignment(10.0) is None
+
+
+def test_assignment_watchdog_fails_a_persistently_detached_consumer():
+    consumer, kafka, _ = loop()
+    kafka.partitions = []
+    with patch("cdc_es_sync.pipeline.consumer.time.monotonic", return_value=131.0):
+        with pytest.raises(RuntimeError, match="no partition assignment"):
+            consumer._check_assignment(10.0)
+    assert consumer.metrics.health(120)[1]["state"] == "failed"
