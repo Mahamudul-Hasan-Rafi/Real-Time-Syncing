@@ -10,8 +10,8 @@ COLUMN log_mode   FORMAT A14
 COLUMN open_mode  FORMAT A12
 
 SELECT name, cdb, log_mode, force_logging, supplemental_log_data_min, supplemental_log_data_all
-  FROM v$database;
+  FROM v$database; -- Check database cdb name, log mode [Archive/NoArchive], and supplemental logging settings
 
-SHOW PARAMETER db_recovery_file_dest
+SHOW PARAMETER db_recovery_file_dest -- Check the location of the recovery file destination
 
-SELECT name, open_mode FROM v$pdbs;
+SELECT name, open_mode FROM v$pdbs; -- Check the open mode of all pluggable databases

@@ -16,8 +16,8 @@ END;
 /
 
 -- The size must be set before the location
-ALTER SYSTEM SET db_recovery_file_dest_size = &fra_size   SCOPE = BOTH;
-ALTER SYSTEM SET db_recovery_file_dest      = '&fra_path' SCOPE = BOTH;
+ALTER SYSTEM SET db_recovery_file_dest_size = &fra_size   SCOPE = BOTH; -- Set the size of the recovery file destination
+ALTER SYSTEM SET db_recovery_file_dest      = '&fra_path' SCOPE = BOTH; -- Set the location of the recovery file destination
 
 -- Expected: Database log mode = Archive Mode, Automatic archival = Enabled, Archive destination = USE_DB_RECOVERY_FILE_DEST
-ARCHIVE LOG LIST
+ARCHIVE LOG LIST -- Check the current archive log status
