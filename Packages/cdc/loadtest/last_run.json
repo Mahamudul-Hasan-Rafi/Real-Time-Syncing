@@ -1,0 +1,26 @@
+{
+  "started_at": "2026-11-17T19:38:49.042950+00:00",
+  "ended_at": "2026-11-17T19:45:49.043244+00:00",
+  "seconds": 420.0,
+  "updates": 10000,
+  "transactions": 500,
+  "per_table": {
+    "MB_ACCOUNT_MST": 600,
+    "UNION_INFO": 600,
+    "UPAZILA_INFO": 600,
+    "DISTRICT_INFO": 600,
+    "MB_ACCOUNT_DAILY_BALANCE": 600,
+    "MB_ACCOUNT_OPERATOR": 600,
+    "MB_ADDRESS_MST": 600,
+    "MB_CUSTOMER_MST": 580,
+    "MB_DOCUMENT_MST": 580,
+    "MB_PRODUCT_MST": 580,
+    "STCODMAS": 580,
+    "ST_AGENT_POINT": 580,
+    "ST_OPERATING_INSTRUCTION": 580,
+    "ST_POINT_CATEGORY": 580,
+    "ST_SECTOR_CODE": 580,
+    "ST_TRANSACTION_CODE": 580,
+    "NOMINEE_MST": 580
+  }
+}

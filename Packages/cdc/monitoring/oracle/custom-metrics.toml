@@ -1,0 +1,60 @@
+# Custom metrics for iamseth/oracledb_exporter. Every metric is named oracledb_<context>_<column>.
+# The exporter connects to the CDB root (service ORCLCDB) as the read-only user from dba_scripts/dba_cdc_04_monitoring_user.sql,
+# because archive logs and the recovery area belong to the CDB, not to a PDB.
+
+# --- Database state -------------------------------------------------------------------------------------------------
+[[metric]]
+context = "db"
+metricsdesc = { open_rw = "1 when the database is OPEN in READ WRITE mode", archivelog = "1 when the database is in ARCHIVELOG mode", current_scn = "Current SCN of the database", force_logging = "1 when FORCE LOGGING is on" }
+request = "SELECT DECODE(open_mode,'READ WRITE',1,0) open_rw, DECODE(log_mode,'ARCHIVELOG',1,0) archivelog, current_scn, DECODE(force_logging,'YES',1,0) force_logging FROM v$database"
+
+[[metric]]
+context = "instance"
+metricsdesc = { uptime_seconds = "Seconds since the instance started" }
+request = "SELECT ROUND((SYSDATE - startup_time) * 86400) uptime_seconds FROM v$instance"
+
+[[metric]]
+context = "pdb"
+labels = ["pdb"]
+metricsdesc = { open_rw = "1 when the pluggable database is OPEN in READ WRITE mode" }
+request = "SELECT name pdb, DECODE(open_mode,'READ WRITE',1,0) open_rw FROM v$pdbs"
+ignorezeroresult = true
+
+# --- Recovery area (FRA): where the archive logs live --------------------------------------------------------------
+[[metric]]
+context = "fra"
+metricsdesc = { limit_bytes = "db_recovery_file_dest_size", used_bytes = "Space used in the recovery area", reclaimable_bytes = "Space Oracle can reclaim automatically", files = "Number of files in the recovery area" }
+request = "SELECT space_limit limit_bytes, space_used used_bytes, space_reclaimable reclaimable_bytes, number_of_files files FROM v$recovery_file_dest"
+
+[[metric]]
+context = "fra_usage"
+labels = ["file_type"]
+metricsdesc = { percent_used = "Percent of the recovery area used by this file type", percent_reclaimable = "Percent of the recovery area reclaimable for this file type", files = "Number of files of this type" }
+request = "SELECT REPLACE(file_type,' ','_') file_type, percent_space_used percent_used, percent_space_reclaimable percent_reclaimable, number_of_files files FROM v$recovery_area_usage"
+
+# --- Archive destination: Debezium refuses to start unless a LOCAL destination is VALID ------------------------------
+[[metric]]
+context = "archive_dest"
+labels = ["dest_name"]
+metricsdesc = { valid = "1 when the LOCAL archive destination status is VALID" }
+request = "SELECT dest_name, DECODE(status,'VALID',1,0) valid FROM v$archive_dest_status WHERE type = 'LOCAL' AND status <> 'INACTIVE'"
+
+# --- Archive log volume and retention -------------------------------------------------------------------------------
+[[metric]]
+context = "archive_log"
+metricsdesc = { bytes_last_hour = "Bytes of archive log generated in the last hour", bytes_last_day = "Bytes of archive log generated in the last 24 hours", bytes_on_disk = "Bytes of archive logs still on disk", files_on_disk = "Archive log files still on disk", oldest_scn = "First SCN of the oldest archive log still on disk", retention_days = "Age in days of the oldest archive log still on disk" }
+request = """
+SELECT NVL(SUM(CASE WHEN completion_time > SYSDATE - 1/24 THEN blocks * block_size END), 0) bytes_last_hour,
+       NVL(SUM(CASE WHEN completion_time > SYSDATE - 1 THEN blocks * block_size END), 0) bytes_last_day,
+       NVL(SUM(CASE WHEN deleted = 'NO' THEN blocks * block_size END), 0) bytes_on_disk,
+       NVL(SUM(CASE WHEN deleted = 'NO' THEN 1 END), 0) files_on_disk,
+       NVL(MIN(CASE WHEN deleted = 'NO' THEN first_change# END), 0) oldest_scn,
+       NVL(ROUND(SYSDATE - MIN(CASE WHEN deleted = 'NO' THEN first_time END), 2), 0) retention_days
+  FROM v$archived_log
+ WHERE dest_id = 1 AND standby_dest = 'NO'
+"""
+
+[[metric]]
+context = "redo"
+metricsdesc = { switches_last_hour = "Redo log switches in the last hour" }
+request = "SELECT COUNT(*) switches_last_hour FROM v$log_history WHERE first_time > SYSDATE - 1/24"

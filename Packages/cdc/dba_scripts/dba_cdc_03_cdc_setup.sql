@@ -73,7 +73,6 @@ GRANT SELECT, FLASHBACK ON &schema..MB_ADDRESS_MST             TO c##debezium;
 GRANT SELECT, FLASHBACK ON &schema..MB_CUSTOMER_MST            TO c##debezium;
 GRANT SELECT, FLASHBACK ON &schema..MB_DOCUMENT_MST            TO c##debezium;
 GRANT SELECT, FLASHBACK ON &schema..MB_PRODUCT_MST             TO c##debezium;
-GRANT SELECT, FLASHBACK ON &schema..MB_TRANSACTION_DTL         TO c##debezium;
 GRANT SELECT, FLASHBACK ON &schema..NOMINEE_MST                TO c##debezium;
 GRANT SELECT, FLASHBACK ON &schema..STCODMAS                   TO c##debezium;
 GRANT SELECT, FLASHBACK ON &schema..ST_AGENT_POINT             TO c##debezium;
@@ -96,7 +95,6 @@ ALTER TABLE &schema..MB_ADDRESS_MST             ADD SUPPLEMENTAL LOG GROUP g_cdc
 ALTER TABLE &schema..MB_CUSTOMER_MST            ADD SUPPLEMENTAL LOG GROUP g_cdc_kafka_mb_customer_mst            (CUST_NO) ALWAYS;
 ALTER TABLE &schema..MB_DOCUMENT_MST            ADD SUPPLEMENTAL LOG GROUP g_cdc_kafka_mb_document_mst            (DOCUMENT_ID, CUST_NO) ALWAYS;
 ALTER TABLE &schema..MB_PRODUCT_MST             ADD SUPPLEMENTAL LOG GROUP g_cdc_kafka_mb_product_mst             (AC_TYPE_ID) ALWAYS;
-ALTER TABLE &schema..MB_TRANSACTION_DTL         ADD SUPPLEMENTAL LOG GROUP g_cdc_kafka_mb_transaction_dtl         (TRAN_ID) ALWAYS;
 ALTER TABLE &schema..NOMINEE_MST                ADD SUPPLEMENTAL LOG GROUP g_cdc_kafka_nominee_mst                (NOMINEE_ID, AC_ID) ALWAYS;
 ALTER TABLE &schema..STCODMAS                   ADD SUPPLEMENTAL LOG GROUP g_cdc_kafka_stcodmas                   (HARCOD, SOFCOD) ALWAYS;
 ALTER TABLE &schema..ST_AGENT_POINT             ADD SUPPLEMENTAL LOG GROUP g_cdc_kafka_st_agent_point             (POINT_ID) ALWAYS;

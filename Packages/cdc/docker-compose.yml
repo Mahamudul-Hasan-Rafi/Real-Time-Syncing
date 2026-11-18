@@ -184,6 +184,23 @@ services:
     cpus: 0.5
     mem_limit: 512m
 
+  # Reads archive log / recovery area / database state from Oracle for Grafana. Needs the read-only user from
+  # dba_scripts/dba_cdc_04_monitoring_user.sql. ORACLE_MON_USER must have # written as %23 (it sits inside a URL).
+  oracle-exporter:
+    profiles: ["monitoring"]
+    image: ghcr.io/iamseth/oracledb_exporter:0.6.0
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: oracle://${ORACLE_MON_USER:-c%23%23cdcmon}:${ORACLE_MON_PASSWORD:-}@${ORACLE_HOST:-}:${ORACLE_PORT:-1521}/${ORACLE_MON_SERVICE:-ORCLCDB}
+      CUSTOM_METRICS: /etc/oracledb_exporter/custom-metrics.toml
+      DEFAULT_METRICS: /etc/oracledb_exporter/empty-default.toml
+      QUERY_TIMEOUT: "25"      # seconds; v$archived_log can be slow on a large database (Prometheus scrape_timeout is 30s)
+    volumes:
+      - ./monitoring/oracle/custom-metrics.toml:/etc/oracledb_exporter/custom-metrics.toml:ro,z
+      - ./monitoring/oracle/empty-default.toml:/etc/oracledb_exporter/empty-default.toml:ro,z
+    cpus: 0.5
+    mem_limit: 256m
+
   prometheus:
     profiles: ["monitoring"]
     image: docker.io/prom/prometheus:v3.5.0
@@ -193,7 +210,10 @@ services:
       - --storage.tsdb.retention.time=30d
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro,z
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro,z
       - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"     # reaches cdc-es-sync on the host's published port
     ports:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     cpus: 1
@@ -211,6 +231,7 @@ services:
     volumes:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro,z
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro,z
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
     cpus: 1
