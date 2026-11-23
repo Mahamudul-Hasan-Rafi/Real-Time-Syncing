@@ -7,7 +7,9 @@ export const defaultValues = (): Values =>
 
 /** Fill {{KEY}} placeholders. Unknown keys are left as they are. */
 export function render(code: string, values: Values): string {
-  return code.replace(/\{\{(\w+)\}\}/g, (m, key: string) => values[key] ?? m);
+  // The scripts' SQL*Plus DEFINEs are compared with the dictionary, which stores names in upper case
+  const all: Values = { ...values, CDC_USER_UC: (values.CDC_USER ?? "").toUpperCase(), PDB_NAME_UC: (values.PDB_NAME ?? "").toUpperCase() };
+  return code.replace(/\{\{(\w+)\}\}/g, (m, key: string) => all[key] ?? m);
 }
 
 export const commandText = (c: Command, values: Values) => render(c.code, values);
@@ -67,14 +69,14 @@ export function toMarkdown(values: Values, generatedNote?: string): string {
     for (const st of s.steps) {
       out.push(`<a id="${anchorOf(st.id)}"></a>`, `### ${numbers[st.id]} ${st.title}`, "");
       const tags = [`**${st.risk}**`];
-      if (st.when) tags.push(`**when:** ${mdNote(st.when)}`);
+      if (st.when) tags.push(`**when:** ${mdNote(render(st.when, values))}`);
       if (st.script) tags.push(`**script:** \`${st.script}\``);
-      out.push(tags.join(" · "), "", st.summary, "");
+      out.push(tags.join(" · "), "", render(st.summary, values), "");
       for (const c of st.commands) {
         out.push(`Run in: ${c.where}`, "", "```" + c.lang, commandText(c, values), "```", "");
       }
-      if (st.expect) out.push(`**Expected:** ${mdNote(st.expect)}`, "");
-      for (const n of st.notes ?? []) out.push(`- ${mdNote(n)}`);
+      if (st.expect) out.push(`**Expected:** ${mdNote(render(st.expect, values))}`, "");
+      for (const n of st.notes ?? []) out.push(`- ${mdNote(render(n, values))}`);
       if (st.notes?.length) out.push("");
       out.push("[Back to contents](#contents)", "");
     }

@@ -234,7 +234,7 @@ export default function RunbookViewer() {
                   <p className="meta">
                     {st.when && (
                       <span>
-                        <strong>When:</strong> <Note text={st.when} />
+                        <strong>When:</strong> <Note text={render(st.when, values)} />
                       </span>
                     )}
                     {st.script && (
@@ -244,7 +244,7 @@ export default function RunbookViewer() {
                     )}
                   </p>
                 )}
-                <p>{st.summary}</p>
+                <p>{render(st.summary, values)}</p>
                 {st.commands.map((c, i) => {
                   const text = commandText(c, values);
                   return (
@@ -263,14 +263,14 @@ export default function RunbookViewer() {
                 })}
                 {st.expect && (
                   <p className="expect">
-                    <strong>Expected:</strong> <Note text={st.expect} />
+                    <strong>Expected:</strong> <Note text={render(st.expect, values)} />
                   </p>
                 )}
                 {st.notes && (
                   <ul className="notes">
                     {st.notes.map((n) => (
                       <li key={n}>
-                        <Note text={n} />
+                        <Note text={render(n, values)} />
                       </li>
                     ))}
                   </ul>

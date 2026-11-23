@@ -47,10 +47,19 @@ export const VARIABLES: Variable[] = [
   { key: "FRA_SIZE", label: "Recovery area size", value: "15G" },
   { key: "MON_USER", label: "Monitoring user", value: "c##cdcmon", help: "read-only, used by Grafana (section 8)" },
   { key: "MON_PASSWORD", label: "Monitoring password", value: "<password>", secret: true },
+  { key: "ORACLE_HOST", label: "Oracle host", value: "10.11.200.37" },
+  { key: "ORACLE_PORT", label: "Oracle port", value: "1521" },
+  { key: "CDB_SERVICE", label: "CDB service name", value: "orclcdb", help: "the connector's database.dbname" },
+  { key: "CONNECT_URL", label: "Kafka Connect URL", value: "http://10.11.200.109:8083" },
+  { key: "CONNECTOR", label: "Connector name", value: "emob-oracle-cdc" },
+  { key: "KEEP_DAYS", label: "Archive logs kept (days)", value: "3", help: "section 10" },
+  { key: "MINUTES", label: "LogMiner test window (minutes)", value: "60", help: "step 7.3" },
+  { key: "ORACLE_HOME", label: "ORACLE_HOME on the DB server", value: "/u01/app/oracle/product/19.0.0/dbhome_1" },
+  { key: "ORACLE_SID", label: "ORACLE_SID of the CDB", value: "ORCLCDB" },
 ];
 
 /** The captured tables and the columns logged for each one. Same list as dba_scripts/dba_cdc_03_cdc_setup.sql. */
-export const TABLES: { name: string; columns: string[] }[] = [
+export const TABLES: { name: string; columns: string[]; captured?: boolean }[] = [
   { name: "DISTRICT_INFO", columns: ["DISTRICT_CODE_GOV", "DISTRICT_CODE"] },
   { name: "MB_ACCOUNT_DAILY_BALANCE", columns: ["AC_ID", "VALUE_DATE"] },
   { name: "MB_ACCOUNT_MST", columns: ["AC_NO", "AC_ID"] },
@@ -59,7 +68,7 @@ export const TABLES: { name: string; columns: string[] }[] = [
   { name: "MB_CUSTOMER_MST", columns: ["CUST_NO"] },
   { name: "MB_DOCUMENT_MST", columns: ["DOCUMENT_ID", "CUST_NO"] },
   { name: "MB_PRODUCT_MST", columns: ["AC_TYPE_ID"] },
-  { name: "MB_TRANSACTION_DTL", columns: ["TRAN_ID"] },
+  { name: "MB_TRANSACTION_DTL", columns: ["TRAN_ID"], captured: false }, // set up, but excluded from the connector in this phase
   { name: "NOMINEE_MST", columns: ["NOMINEE_ID", "AC_ID"] },
   { name: "STCODMAS", columns: ["HARCOD", "SOFCOD"] },
   { name: "ST_AGENT_POINT", columns: ["POINT_ID"] },
@@ -84,7 +93,10 @@ const LOG_GROUPS = TABLES.map(
 ).join("\n");
 
 const TABLE_NAME_LIST = TABLES.map((t) => `'${t.name}'`).join(",");
-export const INCLUDE_LIST = TABLES.map((t) => `{{SCHEMA}}.${t.name}`).join(",");
+/** Tables the connector captures in this phase (all set-up tables except the ones marked captured: false). */
+export const CAPTURED = TABLES.filter((t) => t.captured !== false);
+const NOT_CAPTURED = TABLES.filter((t) => t.captured === false).map((t) => t.name).join(", ");
+export const INCLUDE_LIST = CAPTURED.map((t) => `{{SCHEMA}}.${t.name}`).join(",");
 
 export const INTRO = {
   title: "Oracle CDC database setup runbook",
@@ -98,9 +110,12 @@ export const INTRO = {
   ],
   scripts: [
     { file: "dba_cdc_01_check.sql", does: "Read-only check of the current state", covers: "Section 1" },
-    { file: "dba_cdc_02_archivelog.sql", does: "Recovery area, enable ARCHIVELOG (restarts the database)", covers: "Section 2" },
+    { file: "dba_cdc_02_archivelog.sql", does: "Recovery area, enable ARCHIVELOG (restarts the database). Only for a database that does not archive yet", covers: "Section 2 (2.2 and 2.3)" },
     { file: "dba_cdc_03_cdc_setup.sql", does: "Database logging, CDC user, table grants, log groups, verification", covers: "Sections 3 to 7" },
     { file: "dba_cdc_04_monitoring_user.sql", does: "Read-only user for the Grafana exporter", covers: "Section 8" },
+    { file: "dba_cdc_05_archivelog_cleanup.sh", does: "Scheduled, CDC-safe archive log cleanup (RMAN)", covers: "Section 10" },
+    { file: "dba_cdc_06_check_cdc_privileges.sql", does: "Read-only check of every privilege the CDC user needs", covers: "Step 7.2" },
+    { file: "dba_cdc_07_logminer_capture_test.sql", does: "Read-only test that LogMiner sees changes on the captured tables", covers: "Step 7.3" },
   ],
 };
 
@@ -131,8 +146,7 @@ select name, open_mode from v$pdbs;`,
         ],
         expect: "CDB = YES and your PDB is READ WRITE. Note LOG_MODE.",
         notes: [
-          "LOG_MODE = NOARCHIVELOG: do all of section 2.",
-          "LOG_MODE = ARCHIVELOG: skip [[recovery-dir]] and [[enable-archivelog]], but still do [[archive-dest]].",
+          "Whatever LOG_MODE shows, continue with [[archive-check]]: it decides which other steps of section 2 apply.",
         ],
       },
     ],
@@ -141,14 +155,48 @@ select name, open_mode from v$pdbs;`,
     id: "archive",
     title: "Archive logging",
     intro:
-      "LogMiner reads archived redo logs, and Debezium refuses to start unless a LOCAL archive destination is VALID. Archive logs fill the recovery area, so its size matters too.",
+      "LogMiner reads archived redo logs, and Debezium refuses to start unless a LOCAL archive destination is VALID. A production database is normally archiving already: then this section is only the read-only check in 2.1, and the existing archive setup must not be changed.",
     steps: [
+      {
+        id: "archive-check",
+        title: "Check the existing archive setup",
+        summary: "Read-only. Shows whether the database already archives and whether Debezium can use the destination.",
+        risk: "read-only",
+        commands: [
+          {
+            where: "SQL*Plus as SYSDBA, connected to CDB$ROOT",
+            lang: "sql",
+            code: `set linesize 200 pagesize 100
+col dest_name format a22
+col destination format a40
+col error format a50
+select log_mode from v$database;
+
+select dest_id, dest_name, status, type, destination, error
+  from v$archive_dest_status
+ where status <> 'INACTIVE';
+
+select round(space_limit/1024/1024/1024, 1)       limit_gb,
+       round(space_used/1024/1024/1024, 1)        used_gb,
+       round(space_reclaimable/1024/1024/1024, 1) reclaimable_gb
+  from v$recovery_file_dest;`,
+          },
+        ],
+        expect: "LOG_MODE = ARCHIVELOG and at least one row with TYPE = LOCAL and STATUS = VALID.",
+        notes: [
+          "ARCHIVELOG with one LOCAL destination VALID (normal for production): nothing to change. Skip the rest of section 2 and go to [[db-logging]].",
+          "ARCHIVELOG with several LOCAL destinations VALID: no database change. Tell the platform team which one Debezium should read, for the connector setting log.mining.archive.destination.name (for example LOG_ARCHIVE_DEST_1).",
+          "ARCHIVELOG but no LOCAL destination VALID (only remote or standby destinations, or one in ERROR): stop and agree a fix with the DBA team that owns the archive setup. See [[archive-dest]].",
+          "NOARCHIVELOG (new or test database): do [[recovery-dir]], [[enable-archivelog]] and [[archive-dest]].",
+          "On a database that already archives, never change db_recovery_file_dest or log_archive_dest_n: backups, retention and standby databases depend on them.",
+        ],
+      },
       {
         id: "recovery-dir",
         title: "Create the recovery area directory",
         summary: "The OS directory must exist and belong to the oracle user before Oracle is pointed at it.",
         risk: "change",
-        when: "Only if the directory does not exist yet",
+        when: "Only if LOG_MODE = NOARCHIVELOG (a database that does not archive yet)",
         commands: [
           {
             where: "Shell on the database server, as root",
@@ -187,31 +235,29 @@ archive log list`,
       },
       {
         id: "archive-dest",
-        title: "Set and verify the archive destination",
-        summary: "Debezium needs a LOCAL destination with status VALID. Run this even if the database was already in ARCHIVELOG mode.",
+        title: "Point the archive destination at the recovery area",
+        summary:
+          "Sends archive logs to the recovery area set in the previous step, then verifies it. This also repaired an ERROR destination (ORA-16032) on the test database.",
         risk: "change",
+        when: "Only after [[enable-archivelog]], or to repair a destination in ERROR on a database whose archive setup you own. Never on a production database that already archives",
         commands: [
           {
             where: "SQL*Plus as SYSDBA, connected to CDB$ROOT",
             lang: "sql",
-            code: `alter system set log_archive_dest_1 = 'LOCATION=USE_DB_RECOVERY_FILE_DEST' scope = both;
+            code: `select value from v$parameter where name = 'log_archive_dest_1';   -- record the current value first
 
-set linesize 200 pagesize 100
-col dest_name format a22
-col destination format a30
-col error format a60
+alter system set log_archive_dest_1 = 'LOCATION=USE_DB_RECOVERY_FILE_DEST' scope = both;
+
 select dest_id, dest_name, status, type, destination, error
   from v$archive_dest
- where dest_id = 1;
-
-select round(space_limit/1024/1024/1024, 1)       limit_gb,
-       round(space_used/1024/1024/1024, 1)        used_gb,
-       round(space_reclaimable/1024/1024/1024, 1) reclaimable_gb
-  from v$recovery_file_dest;`,
+ where dest_id = 1;`,
           },
         ],
-        expect: "STATUS = VALID, TYPE = LOCAL, ERROR empty, and used_gb well below limit_gb.",
-        notes: ["Do not continue to [[db-logging]] until the destination is VALID."],
+        expect: "STATUS = VALID, TYPE = LOCAL, ERROR empty.",
+        notes: [
+          "Keep the value recorded by the first query: it is how you undo the change.",
+          "Do not continue to [[db-logging]] until a LOCAL destination is VALID. Re-run [[archive-check]] to confirm.",
+        ],
       },
     ],
   },
@@ -432,7 +478,72 @@ select supplemental_log_data_min as sup_min, supplemental_log_data_all as sup_al
         expect: `1) the user, ACCOUNT_STATUS = OPEN. 2) ${TABLES.length} rows, LOG_GROUP_TYPE = USER LOG GROUP, ALWAYS = ALWAYS. 3) ${TABLES.length}. 4) SUP_MIN = YES, SUP_ALL = NO, FORCE_LOGGING = YES, LOG_MODE = ARCHIVELOG.`,
         notes: [
           "SUP_ALL = NO is correct: it confirms nobody enabled ALL COLUMNS logging at database level.",
-          "The archive destination was already checked in [[archive-dest]].",
+          "The archive destination was already checked in [[archive-check]].",
+        ],
+      },
+      {
+        id: "check-privileges",
+        title: "Check every privilege of the CDC user",
+        summary:
+          "One row per requirement, problems first: the user in both containers, the 22 LogMiner privileges in CDB$ROOT and in the PDB, quota for Debezium's LOG_MINING_FLUSH table, and SELECT and FLASHBACK on each captured table.",
+        risk: "read-only",
+        script: "dba_cdc_06_check_cdc_privileges.sql",
+        commands: [
+          {
+            where: "Edit the DEFINE lines at the top of the script (values in upper case)",
+            lang: "sql",
+            code: `DEFINE cdc_user = '{{CDC_USER_UC}}'
+DEFINE pdb_name = '{{PDB_NAME_UC}}'
+DEFINE schema   = '{{SCHEMA}}'`,
+          },
+          {
+            where: "Shell on the database server, as oracle",
+            lang: "bash",
+            code: `sqlplus / as sysdba @dba_cdc_06_check_cdc_privileges.sql`,
+          },
+        ],
+        expect: "Every row OK or VIA ROLE. Section 3 says LOG_MINING_FLUSH exists once the connector has started at least once.",
+        notes: [
+          "It must run as SYSDBA: as any other user it stops with ORA-20006, because the PDB checks would be wrong.",
+          "OK in CDB$ROOT but MISSING in the PDB: the GRANT was given without CONTAINER = ALL. Re-run it from [[grant-privileges]].",
+          "Quota MISSING: ALTER USER {{CDC_USER}} QUOTA UNLIMITED ON USERS CONTAINER = ALL;",
+          `Section 4 of the script lists the ${CAPTURED.length} captured tables. Edit its table list when the captured tables change.`,
+        ],
+      },
+      {
+        id: "logminer-test",
+        title: "Test that LogMiner captures changes on the captured tables",
+        summary:
+          "Does what Debezium does, as the CDC user: adds the recent archive and online redo logs to a LogMiner session, starts it, and counts committed changes per captured table, with sample redo.",
+        risk: "read-only",
+        script: "dba_cdc_07_logminer_capture_test.sql",
+        commands: [
+          {
+            where: "Optional, so there is something to find: one no-op change as the schema owner, in another session",
+            lang: "sql",
+            code: `alter session set container = {{PDB_NAME}};
+update {{SCHEMA}}.ST_OPERATING_INSTRUCTION set OPR_INS = OPR_INS where rownum = 1;
+commit;`,
+          },
+          {
+            where: "Edit the DEFINE lines at the top of the script",
+            lang: "sql",
+            code: `DEFINE pdb_name = '{{PDB_NAME_UC}}'
+DEFINE schema   = '{{SCHEMA}}'
+DEFINE minutes  = {{MINUTES}}`,
+          },
+          {
+            where: "Any machine with sqlplus, as the CDC user (this also proves its privileges are enough)",
+            lang: "bash",
+            code: `sqlplus '{{CDC_USER}}@//{{ORACLE_HOST}}:{{ORACLE_PORT}}/{{CDB_SERVICE}}' @dba_cdc_07_logminer_capture_test.sql`,
+          },
+        ],
+        expect:
+          'Section 2 prints "LogMiner started: OK". Section 3 lists the changed tables with their change counts. Section 4 shows UPDATE redo whose WHERE part contains the log-group columns (for example AC_ID, AC_NO), not only ROWID.',
+        notes: [
+          "No rows in section 3: nothing was committed on those tables in the window. Make the optional change above, or raise the window, and run again.",
+          "ORA-01291 or ORA-01284: a log file LogMiner needs is no longer on disk. Check the cleanup in [[cleanup-decide]].",
+          "ORA-01031: a privilege is missing. Run [[check-privileges]].",
         ],
       },
     ],
@@ -498,8 +609,77 @@ table.include.list      = ${INCLUDE_LIST}`,
         ],
         notes: [
           "The user name is case-sensitive in the connector config. Use the name exactly as created.",
+          `table.include.list holds the ${CAPTURED.length} captured tables. ${NOT_CAPTURED} has its grant and log group but is excluded from the connector in this phase.`,
           "A new table needs a grant ([[table-grants]]), a log group ([[log-groups]]) and an entry in table.include.list.",
           "With snapshot.mode = no_data only changes made after the connector starts are captured, and only when committed.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "maintenance",
+    title: "Archive log maintenance",
+    intro:
+      "Ongoing, after go-live. Archive logs never shrink on their own, and when the archive destination is full Oracle stops accepting changes (ORA-00257). Delete them on a schedule, but never one the connector still needs.",
+    steps: [
+      {
+        id: "cleanup-decide",
+        title: "Decide who cleans up the archive logs",
+        summary: "A production database usually has RMAN backup and cleanup jobs already. Do not add a second one there.",
+        risk: "read-only",
+        commands: [
+          {
+            where: "Shell on the database server, as oracle",
+            lang: "bash",
+            code: `echo "SHOW ARCHIVELOG DELETION POLICY; LIST BACKUP OF ARCHIVELOG ALL SUMMARY;" | rman target /
+crontab -l | grep -i rman`,
+          },
+        ],
+        expect: "Either an existing RMAN backup and cleanup job, or none.",
+        notes: [
+          "Existing job (normal for production): leave it in place and give the DBA team one rule: never delete an archive log newer than the connector's resume SCN, shown as Required SCN on the Grafana dashboard. Skip the rest of this section.",
+          "No job (test or new database): continue with [[cleanup-dry-run]] and [[cleanup-schedule]].",
+          "Deletion policy TO BACKED UP and no backups exist: RMAN deletes nothing. On a test database without backups: CONFIGURE ARCHIVELOG DELETION POLICY TO NONE;",
+        ],
+      },
+      {
+        id: "cleanup-dry-run",
+        title: "Dry-run the cleanup script",
+        summary:
+          "Lists the archive logs it would delete: older than the retention and wholly before the connector's resume SCN, read from Kafka Connect. It deletes nothing, and stops, if Kafka Connect cannot be reached.",
+        risk: "read-only",
+        when: "Only if no cleanup job exists ([[cleanup-decide]])",
+        script: "dba_cdc_05_archivelog_cleanup.sh",
+        commands: [
+          {
+            where: "Shell on the database server, as oracle",
+            lang: "bash",
+            code: `chmod 750 /home/oracle/scripts/dba_cdc_05_archivelog_cleanup.sh
+DRY_RUN=1 KEEP_DAYS={{KEEP_DAYS}} CONNECT_URL={{CONNECT_URL}} CONNECTOR={{CONNECTOR}} /home/oracle/scripts/dba_cdc_05_archivelog_cleanup.sh`,
+          },
+        ],
+        expect: 'The connector resume SCN, then either the sequences that qualify or "nothing to delete". The recovery area usage is printed before and after.',
+        notes: ["ABORT, cannot read the resume SCN: the database server cannot reach the Kafka Connect URL. Fix that first, and do not schedule the script with ALLOW_WITHOUT_CDC=1."],
+      },
+      {
+        id: "cleanup-schedule",
+        title: "Schedule the cleanup",
+        summary: "Every 6 hours through cron, with a log file. cron starts with an empty environment, so ORACLE_HOME and ORACLE_SID are set on the line.",
+        risk: "change",
+        when: "After a clean [[cleanup-dry-run]]",
+        script: "dba_cdc_05_archivelog_cleanup.sh",
+        commands: [
+          {
+            where: "crontab -e, as oracle on the database server (one line)",
+            lang: "bash",
+            code: `0 */6 * * * ORACLE_HOME={{ORACLE_HOME}} ORACLE_SID={{ORACLE_SID}} PATH={{ORACLE_HOME}}/bin:/usr/bin:/bin KEEP_DAYS={{KEEP_DAYS}} CONNECT_URL={{CONNECT_URL}} CONNECTOR={{CONNECTOR}} /home/oracle/scripts/dba_cdc_05_archivelog_cleanup.sh >> /home/oracle/logs/arch_cleanup.log 2>&1`,
+          },
+        ],
+        expect: 'A new block in /home/oracle/logs/arch_cleanup.log every 6 hours, ending with "done" or "nothing to delete".',
+        notes: [
+          "Choose the retention from the archive rate: at least the longest connector outage you want to survive, plus a margin.",
+          "Never delete archive files with rm. If someone did, the CROSSCHECK the script runs removes the stale records.",
+          "Grafana warns at 80% and 90% recovery area use and shows Hours until full.",
         ],
       },
     ],

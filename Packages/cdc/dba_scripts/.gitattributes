@@ -1,0 +1,3 @@
+# DBA scripts run on the Linux database server: keep Unix line endings, even on a Windows checkout
+*.sql text eol=lf
+*.sh  text eol=lf

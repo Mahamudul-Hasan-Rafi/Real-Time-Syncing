@@ -5,7 +5,7 @@
     "tasks.max": "1",
     "database.hostname": "${ORACLE_HOST}",
     "database.port": "${ORACLE_PORT}",
-    "database.user": "c##debezium",
+    "database.user": "c##test",
     "database.password": "${CDC_USER_PASSWORD}",
     "database.dbname": "orclcdb",
     "database.pdb.name": "orclpdb1",
