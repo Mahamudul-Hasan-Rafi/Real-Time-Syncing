@@ -36,6 +36,8 @@ docker compose logs -f cdc-es-sync
 | `cdc-es-sync check` | Verifies Kafka, Elasticsearch, Oracle, the SQL, the supplemental log groups and the field map. |
 | `cdc-es-sync reconcile` | Compares document counts and one amount total per index between Oracle and Elasticsearch. |
 | `cdc-es-sync resync <index>` | Rebuilds every document of one index from Oracle. |
+| `cdc-es-sync connector-deploy` | Creates or updates this application's Debezium connector. |
+| `cdc-es-sync connector-watchdog` | Restarts failed tasks for this application's connector without resetting offsets. |
 
 In Docker prefix them with `docker compose run --rm`; `python -m cdc_es_sync ...` is the same command.
 Exit codes: `0` success, `1` a check or comparison failed, `2` configuration error or failed preconditions.

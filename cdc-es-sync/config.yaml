@@ -8,6 +8,7 @@ kafka:
   auto_offset_reset: "${CDC_OFFSET_RESET:earliest}"   # first start of this group reads everything still in the topics
   dlq_topic: cdc.es-sync.dlq
   session_timeout_ms: 45000
+  heartbeat_interval_ms: 15000
   max_poll_interval_ms: 1800000         # a very large fan-out rebuild may run for minutes between polls
 
 batch:

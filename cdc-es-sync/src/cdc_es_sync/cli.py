@@ -1,4 +1,5 @@
 """Command line: cdc-es-sync [--config config.yaml] run | check | reconcile | resync <index>
+| connector-deploy | connector-watchdog
 
 Exit codes: 0 success, 1 a check or comparison failed (or resync was interrupted), 2 configuration or preconditions.
 """
@@ -6,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -27,11 +29,37 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("reconcile", help="compare document counts and amount totals between Oracle and Elasticsearch")
     rs = sub.add_parser("resync", help="rebuild every document of one index from Oracle")
     rs.add_argument("index")
+    deploy = sub.add_parser("connector-deploy", help="create or update the Debezium connector owned by this application")
+    deploy.add_argument("--template", default="debezium/emob-oracle-connector.json")
+    deploy.add_argument("--connect-url", default="http://localhost:8083")
+    deploy.add_argument("--timeout", type=float, default=120.0)
+    sub.add_parser("connector-watchdog", help="restart failed tasks for this application's Debezium connector")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "connector-deploy":
+        from .connectors.debezium import deploy_connector
+
+        try:
+            deploy_connector(
+                args.template,
+                args.connect_url,
+                args.timeout,
+            )
+        except Exception as exc:
+            print(f"connector deployment failed: {exc}", file=sys.stderr)
+            return 1
+        return 0
+    if args.command == "connector-watchdog":
+        from .connectors.debezium import run_watchdog
+
+        return run_watchdog(
+            os.environ.get("KAFKA_CONNECT_URL", "http://localhost:8083"),
+            os.environ.get("DEBEZIUM_CONNECTOR_NAME", "emob-oracle-cdc"),
+        )
+
     try:
         settings = load_settings(args.config)
         obs = settings.observability

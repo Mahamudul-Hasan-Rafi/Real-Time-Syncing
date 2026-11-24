@@ -14,6 +14,49 @@
 name: cdc-es-sync
 
 services:
+  connector-deploy:
+    build: .
+    image: era/cdc-es-sync:${CDC_ES_SYNC_VERSION:-1.1.0}
+    restart: "no"
+    env_file: .env
+    environment:
+      KAFKA_CONNECT_URL: ${KAFKA_CONNECT_URL:-http://localhost:8083}
+      DEBEZIUM_CONNECTOR_NAME: ${DEBEZIUM_CONNECTOR_NAME:-emob-oracle-cdc}
+      ORACLE_HOST: ${ORACLE_HOST:-}
+      ORACLE_PORT: ${ORACLE_PORT:-1521}
+      ORACLE_CDC_USER: ${ORACLE_CDC_USER:-}
+      ORACLE_CDC_PASSWORD: ${ORACLE_CDC_PASSWORD:-}
+      ORACLE_CDB: ${ORACLE_CDB:-orclcdb}
+      ORACLE_PDB: ${ORACLE_PDB:-orclpdb1}
+      TABLE_INCLUDE_LIST: ${TABLE_INCLUDE_LIST:-}
+    command: ["connector-deploy", "--connect-url", "${KAFKA_CONNECT_URL:-http://localhost:8083}", "--timeout", "120"]
+    volumes:
+      - ./debezium/emob-oracle-connector.json:/app/debezium/emob-oracle-connector.json:ro
+    networks:
+      - default
+
+  connector-watchdog:
+    build: .
+    image: era/cdc-es-sync:${CDC_ES_SYNC_VERSION:-1.1.0}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      KAFKA_CONNECT_URL: ${KAFKA_CONNECT_URL:-http://localhost:8083}
+      DEBEZIUM_CONNECTOR_NAME: ${DEBEZIUM_CONNECTOR_NAME:-emob-oracle-cdc}
+      DEBEZIUM_MAX_ATTEMPTS: ${DEBEZIUM_MAX_ATTEMPTS:-10}
+      DEBEZIUM_CHECK_INTERVAL_SECONDS: ${DEBEZIUM_CHECK_INTERVAL_SECONDS:-30}
+      DEBEZIUM_RETRY_STEP_SECONDS: ${DEBEZIUM_RETRY_STEP_SECONDS:-30}
+      DEBEZIUM_RETRY_MAX_SECONDS: ${DEBEZIUM_RETRY_MAX_SECONDS:-300}
+      DEBEZIUM_STABLE_SECONDS: ${DEBEZIUM_STABLE_SECONDS:-600}
+    depends_on:
+      connector-deploy:
+        condition: service_completed_successfully
+    command: ["connector-watchdog"]
+    volumes:
+      - cdc-watchdog-logs:/app/logs
+    networks:
+      - default
+
   cdc-es-sync:
     build: .
     image: era/cdc-es-sync:${CDC_ES_SYNC_VERSION:-1.1.0}
@@ -24,6 +67,15 @@ services:
     env_file: .env                      # ORACLE_USER, ORACLE_PASSWORD and the optional overrides below
     environment:
       TZ: ${TZ:-Asia/Dhaka}
+      KAFKA_CONNECT_URL: ${KAFKA_CONNECT_URL:-http://localhost:8083}
+      DEBEZIUM_CONNECTOR_NAME: ${DEBEZIUM_CONNECTOR_NAME:-emob-oracle-cdc}
+      ORACLE_HOST: ${ORACLE_HOST:-}
+      ORACLE_PORT: ${ORACLE_PORT:-1521}
+      ORACLE_CDC_USER: ${ORACLE_CDC_USER:-}
+      ORACLE_CDC_PASSWORD: ${ORACLE_CDC_PASSWORD:-}
+      ORACLE_CDB: ${ORACLE_CDB:-orclcdb}
+      ORACLE_PDB: ${ORACLE_PDB:-orclpdb1}
+      TABLE_INCLUDE_LIST: ${TABLE_INCLUDE_LIST:-}
     ports:
       - "${METRICS_PORT:-9108}:9108"    # /health and /metrics (Prometheus)
     volumes:
@@ -43,3 +95,4 @@ services:
 volumes:
   cdc-logs:
   cdc-dlq:
+  cdc-watchdog-logs:

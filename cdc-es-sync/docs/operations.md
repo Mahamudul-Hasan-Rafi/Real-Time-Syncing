@@ -20,6 +20,8 @@ The quick start is in the [README](../README.md).
 | `docker compose run --rm cdc-es-sync check` | The 9 start-up checks. All must PASS before going live. |
 | `docker compose run --rm cdc-es-sync reconcile` | Document count and one amount total per index, Oracle vs Elasticsearch (the document query itself is used on the Oracle side). Exit 1 on a mismatch. Run it when no changes are flowing, or allow for a few documents. |
 | `docker compose run --rm cdc-es-sync resync customer_data` | Rebuilds one index from Oracle (closes the gap before CDC started). |
+| `docker compose run --rm connector-deploy` | Creates or updates the application's Debezium connector. |
+| `docker compose up -d connector-watchdog` | Monitors and restarts only failed tasks for that connector. |
 | `docker compose restart cdc-es-sync` | Reloads `config.yaml` and `indices/` (mounted read-only, so no rebuild is needed). |
 | `docker compose stop` | SIGTERM: the batch in progress finishes and the consumer leaves its group (up to 60 s). |
 | `curl http://localhost:9108/health` | The container's healthcheck. `/metrics` is Prometheus. |

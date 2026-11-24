@@ -23,6 +23,7 @@ In Docker both are mounted read-only (`./config.yaml`, `./indices`): edit them a
 | `kafka.topic_pattern` | required | `^emob\.EMOB\..*`: one Debezium topic per table. |
 | `kafka.dlq_topic` | required | `cdc.es-sync.dlq`. Created at start-up if missing. |
 | `kafka.auto_offset_reset` | `earliest` | A new group, or a newly appearing table topic, is read from its first message, so no first event is missed. |
+| `kafka.heartbeat_interval_ms` | `15000` | Consumer heartbeat interval for Kafka consumer-group membership. |
 | `kafka.session_timeout_ms` | `45000` | After a hard kill, takeover waits this long. |
 | `kafka.max_poll_interval_ms` | `1800000` | A very large rebuild may keep the loop busy for minutes without being thrown out of the group. |
 | `batch.max_events`, `batch.max_wait_seconds` | `500`, `1.0` | A batch is up to 500 events or 1 second. Duplicates inside a batch collapse. |

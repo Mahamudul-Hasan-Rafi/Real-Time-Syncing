@@ -27,6 +27,7 @@ RUN pip install --no-deps .
 
 COPY config.yaml ./config.yaml
 COPY indices ./indices
+COPY debezium ./debezium
 
 # Not root. logs/ and dlq/ are volumes; created here so a fresh named volume inherits the owner.
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app \

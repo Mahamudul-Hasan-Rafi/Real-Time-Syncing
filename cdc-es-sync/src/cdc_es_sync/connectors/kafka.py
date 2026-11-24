@@ -21,6 +21,7 @@ def consumer_config(kafka: KafkaSettings) -> dict[str, object]:
         "enable.auto.commit": False,
         "auto.offset.reset": kafka.auto_offset_reset,
         "session.timeout.ms": kafka.session_timeout_ms,
+        "heartbeat.interval.ms": kafka.heartbeat_interval_ms,
         "max.poll.interval.ms": kafka.max_poll_interval_ms,
         "topic.metadata.refresh.interval.ms": 10000,
         "allow.auto.create.topics": False,

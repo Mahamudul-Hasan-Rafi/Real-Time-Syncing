@@ -6,6 +6,16 @@
 # STACK_NETWORK is the stack's default network: "<its compose project name>_default". The stack's folder is "cdc",
 # so it is cdc_default. Check with `docker network ls`.
 services:
+  connector-deploy:
+    environment:
+      KAFKA_CONNECT_URL: http://connect:8083
+    networks:
+      - stack
+  connector-watchdog:
+    environment:
+      KAFKA_CONNECT_URL: http://connect:8083
+    networks:
+      - stack
   cdc-es-sync:
     environment:
       KAFKA_BOOTSTRAP: kafka:29092

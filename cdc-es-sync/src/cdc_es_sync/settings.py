@@ -35,6 +35,7 @@ class KafkaSettings:
     dlq_topic: str
     auto_offset_reset: str = "earliest"
     session_timeout_ms: int = 45_000
+    heartbeat_interval_ms: int = 15_000
     max_poll_interval_ms: int = 1_800_000
 
 

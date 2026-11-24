@@ -1,0 +1,25 @@
+{
+  "name": "emob-oracle-cdc",
+  "config": {
+    "connector.class": "io.debezium.connector.oracle.OracleConnector",
+    "tasks.max": "1",
+    "database.hostname": "${ORACLE_HOST}",
+    "database.port": "${ORACLE_PORT}",
+    "database.user": "${ORACLE_CDC_USER}",
+    "database.password": "${ORACLE_CDC_PASSWORD}",
+    "database.dbname": "${ORACLE_CDB}",
+    "database.pdb.name": "${ORACLE_PDB}",
+    "database.connection.adapter": "logminer",
+    "log.mining.strategy": "online_catalog",
+    "topic.prefix": "emob",
+    "table.include.list": "${TABLE_INCLUDE_LIST}",
+    "snapshot.mode": "no_data",
+    "snapshot.locking.mode": "none",
+    "decimal.handling.mode": "string",
+    "include.schema.changes": "false",
+    "heartbeat.interval.ms": "10000",
+    "tombstones.on.delete": "true",
+    "topic.creation.default.partitions": "1",
+    "topic.creation.default.replication.factor": "1"
+  }
+}
