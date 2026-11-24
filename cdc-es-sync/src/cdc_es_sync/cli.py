@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("index")
     deploy = sub.add_parser("connector-deploy", help="create or update the Debezium connector owned by this application")
     deploy.add_argument("--template", default="debezium/emob-oracle-connector.json")
-    deploy.add_argument("--connect-url", default="http://localhost:8083")
+    deploy.add_argument("--connect-url", default=os.environ.get("KAFKA_CONNECT_URL", "http://localhost:8083"))
     deploy.add_argument("--timeout", type=float, default=120.0)
     sub.add_parser("connector-watchdog", help="restart failed tasks for this application's Debezium connector")
     return parser
