@@ -1,24 +1,89 @@
+# Prometheus JMX exporter rules for the Kafka broker (KRaft, broker+controller).
+#
+# Explicit, anchored rules only: label values (topic, request, listener) stay labels and never become part of a
+# metric name, and anything not listed here is not exported. Kafka "...PerSec" meters are exported as their
+# cumulative Count (COUNTER, exposed as <name>_total): use rate() in Prometheus instead of the meters' moving averages.
 lowercaseOutputName: true
 lowercaseOutputLabelNames: true
 rules:
-  - pattern: 'kafka.server<type=(.+), name=(.+), clientId=(.+), topic=(.+), partition=(.*)><>Value'
-    name: kafka_server_$1_$2
+  # ---- Throughput. Series without a topic label are the broker total: filter with {topic=""} ---------------------------
+  - pattern: 'kafka\.server<type=BrokerTopicMetrics, name=(\w+)PerSec, topic=([^>]+)><>Count:'
+    name: kafka_server_brokertopicmetrics_$1
+    type: COUNTER
+    labels: { topic: "$2" }
+  - pattern: 'kafka\.server<type=BrokerTopicMetrics, name=(\w+)PerSec><>Count:'
+    name: kafka_server_brokertopicmetrics_$1
+    type: COUNTER
+
+  # ---- Partition and replica health ---------------------------------------------------------------------------------
+  - pattern: 'kafka\.server<type=ReplicaManager, name=(\w+)><>Value:'
+    name: kafka_server_replicamanager_$1
     type: GAUGE
-    labels: { clientId: "$3", topic: "$4", partition: "$5" }
-  - pattern: 'kafka.server<type=(.+), name=(.+), topic=(.+)><>(Count|OneMinuteRate)'
-    name: kafka_server_$1_$2_$4
+  - pattern: 'kafka\.server<type=ReplicaManager, name=(\w+)PerSec><>Count:'
+    name: kafka_server_replicamanager_$1
+    type: COUNTER
+  - pattern: 'kafka\.server<type=ReplicaFetcherManager, name=MaxLag, clientId=Replica><>Value:'
+    name: kafka_server_replicafetchermanager_maxlag
     type: GAUGE
-    labels: { topic: "$3" }
-  - pattern: 'kafka.server<type=(.+), name=(.+)><>(Count|OneMinuteRate|Value)'
-    name: kafka_server_$1_$2_$3
+  - pattern: 'kafka\.server<type=KafkaServer, name=BrokerState><>Value:'
+    name: kafka_server_kafkaserver_brokerstate
     type: GAUGE
-  - pattern: 'kafka.controller<type=(.+), name=(.+)><>(Count|Value)'
-    name: kafka_controller_$1_$2_$3
+
+  # ---- Controller (KRaft) -------------------------------------------------------------------------------------------
+  - pattern: 'kafka\.controller<type=KafkaController, name=(\w+)><>Value:'
+    name: kafka_controller_kafkacontroller_$1
     type: GAUGE
-  - pattern: 'kafka.network<type=(.+), name=(.+)><>(Count|Value|Mean|99thPercentile)'
-    name: kafka_network_$1_$2_$3
+  - pattern: 'kafka\.controller<type=ControllerStats, name=(\w+?)(?:PerSec)?><>Count:'
+    name: kafka_controller_controllerstats_$1
+    type: COUNTER
+  - pattern: 'kafka\.server<type=raft-metrics><>(current-leader|current-epoch|high-watermark|log-end-offset|commit-latency-avg|commit-latency-max|poll-idle-ratio-avg):'
+    name: kafka_server_raft_metrics_$1
     type: GAUGE
-  - pattern: 'kafka.log<type=Log, name=(.+), topic=(.+), partition=(.+)><>Value'
+  - pattern: 'kafka\.server<type=broker-metadata-metrics><>(last-applied-record-lag-ms|metadata-load-error-count|metadata-apply-error-count):'
+    name: kafka_server_broker_metadata_$1
+    type: GAUGE
+
+  # ---- Saturation ---------------------------------------------------------------------------------------------------
+  - pattern: 'kafka\.server<type=KafkaRequestHandlerPool, name=RequestHandlerAvgIdlePercent><>OneMinuteRate:'
+    name: kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent
+    type: GAUGE
+  - pattern: 'kafka\.network<type=SocketServer, name=NetworkProcessorAvgIdlePercent><>Value:'
+    name: kafka_network_socketserver_networkprocessoravgidlepercent
+    type: GAUGE
+  - pattern: 'kafka\.network<type=RequestChannel, name=(RequestQueueSize|ResponseQueueSize)><>Value:'
+    name: kafka_network_requestchannel_$1
+    type: GAUGE
+  - pattern: 'kafka\.server<type=socket-server-metrics, listener=([^,]+), networkProcessor=([^>]+)><>connection-count:'
+    name: kafka_server_socket_server_connection_count
+    type: GAUGE
+    labels: { listener: "$1", network_processor: "$2" }
+
+  # ---- Requests: rate, errors and latency (latency only for the data-path requests) ---------------------------------
+  - pattern: 'kafka\.network<type=RequestMetrics, name=RequestsPerSec, request=(\w+), version=(\d+)><>Count:'
+    name: kafka_network_requestmetrics_requests
+    type: COUNTER
+    labels: { request: "$1", version: "$2" }
+  - pattern: 'kafka\.network<type=RequestMetrics, name=ErrorsPerSec, request=(\w+), error=(\w+)><>Count:'
+    name: kafka_network_requestmetrics_errors
+    type: COUNTER
+    labels: { request: "$1", error: "$2" }
+  - pattern: 'kafka\.network<type=RequestMetrics, name=(TotalTimeMs|RequestQueueTimeMs|LocalTimeMs|RemoteTimeMs|ResponseSendTimeMs), request=(Produce|FetchConsumer|FetchFollower)><>99thPercentile:'
+    name: kafka_network_requestmetrics_$1_p99
+    type: GAUGE
+    labels: { request: "$2" }
+  - pattern: 'kafka\.network<type=RequestMetrics, name=(TotalTimeMs|RequestQueueTimeMs|LocalTimeMs|RemoteTimeMs|ResponseSendTimeMs), request=(Produce|FetchConsumer|FetchFollower)><>Mean:'
+    name: kafka_network_requestmetrics_$1_mean
+    type: GAUGE
+    labels: { request: "$2" }
+
+  # ---- Storage ------------------------------------------------------------------------------------------------------
+  - pattern: 'kafka\.log<type=Log, name=(Size|NumLogSegments|LogStartOffset|LogEndOffset), topic=([^,]+), partition=([^>]+)><>Value:'
     name: kafka_log_$1
     type: GAUGE
     labels: { topic: "$2", partition: "$3" }
+  - pattern: 'kafka\.log<type=LogFlushStats, name=LogFlushRateAndTimeMs><>99thPercentile:'
+    name: kafka_log_flush_time_ms_p99
+    type: GAUGE
+  - pattern: 'kafka\.server<type=KafkaServer, name=linux-disk-(read|write)-bytes><>Value:'
+    name: kafka_server_disk_$1_bytes
+    type: COUNTER

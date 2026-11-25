@@ -1,2 +1,0 @@
-# Intentionally empty. The exporter's built-in metrics (sessions, tablespace, asm_diskgroup ...) read views the read-only
-# monitoring user does not have and fail every scrape with ORA-00942. Only custom-metrics.toml is used.

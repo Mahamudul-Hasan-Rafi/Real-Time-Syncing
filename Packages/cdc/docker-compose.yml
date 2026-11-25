@@ -1,4 +1,5 @@
-# Full CDC stack: Kafka (KRaft) + Debezium Connect (Oracle) + Kafka UI + one-shot connector registration.
+# Central CDC platform: Kafka (KRaft) + Kafka Connect with Debezium + Kafka UI, and optional monitoring.
+# Connectors are deployed by each application through the Connect REST API (see cdc-es-sync/debezium/).
 # Usage: docker compose up -d --build      (Podman: podman compose up -d --build)
 # Podman cAdvisor paths: add  -f docker-compose.yml -f docker-compose.podman.yml
 # Override with env vars or a .env file: KAFKA_HOST, KAFKA_PORT, CONNECT_PORT, UI_PORT
@@ -72,10 +73,6 @@ services:
       retries: 60
       start_period: 15s
 
-  # One-shot: registers the Debezium connector once Connect is healthy. emob-oracle-connector.json is a template:
-  # ${ORACLE_HOST}, ${ORACLE_PORT} and ${CDC_USER_PASSWORD} are filled in from Packages/cdc/.env (see .env.example).
-  # Nothing happens if the connector already exists. To register it again: docker compose run --rm connector-init
-
   kafka-ui:
     build: ./dockerfiles/kafka-ui
     image: era/kafka-ui:1.5.0
@@ -121,23 +118,6 @@ services:
     cpus: 0.5
     mem_limit: 512m
 
-  # Reads archive log / recovery area / database state from Oracle for Grafana. Needs the read-only user from
-  # dba_scripts/dba_cdc_04_monitoring_user.sql. ORACLE_MON_USER must have # written as %23 (it sits inside a URL).
-  oracle-exporter:
-    profiles: ["monitoring"]
-    image: ghcr.io/iamseth/oracledb_exporter:0.6.0
-    restart: unless-stopped
-    environment:
-      DATA_SOURCE_NAME: oracle://${ORACLE_MON_USER:-c%23%23cdcmon}:${ORACLE_MON_PASSWORD:-}@${ORACLE_HOST:-}:${ORACLE_PORT:-1521}/${ORACLE_MON_SERVICE:-ORCLCDB}
-      CUSTOM_METRICS: /etc/oracledb_exporter/custom-metrics.toml
-      DEFAULT_METRICS: /etc/oracledb_exporter/empty-default.toml
-      QUERY_TIMEOUT: "25"      # seconds; v$archived_log can be slow on a large database (Prometheus scrape_timeout is 30s)
-    volumes:
-      - ./monitoring/oracle/custom-metrics.toml:/etc/oracledb_exporter/custom-metrics.toml:ro,z
-      - ./monitoring/oracle/empty-default.toml:/etc/oracledb_exporter/empty-default.toml:ro,z
-    cpus: 0.5
-    mem_limit: 256m
-
   prometheus:
     profiles: ["monitoring"]
     image: docker.io/prom/prometheus:v3.5.0
@@ -149,8 +129,6 @@ services:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro,z
       - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro,z
       - prometheus-data:/prometheus
-    extra_hosts:
-      - "host.docker.internal:host-gateway"     # reaches cdc-es-sync on the host's published port
     ports:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     cpus: 1

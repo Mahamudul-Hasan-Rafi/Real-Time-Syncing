@@ -1,53 +1,67 @@
-# CDC monitoring (Grafana)
+# Kafka & CDC platform monitoring (Grafana)
 
-Three dashboards in the Grafana folder **CDC**, fed by Prometheus and linked to each other in the top bar:
+Central monitoring for Kafka, Kafka Connect and every Debezium connector deployed on it, whichever team owns the
+connector. Four dashboards in the Grafana folder **CDC**, linked to each other in the top bar:
 
-| Dashboard | uid | What it shows |
+| Dashboard | uid | What it answers |
 |---|---|---|
-| Oracle CDC Operations Center | `cdc-ops` | Executive overview: health banner, 7 icon tiles (Canvas), a health gauge + check list + trend for Oracle/LogMiner, Debezium and Kafka, retention and CDC lag, target apply, and a 24h alert history with FIRING / Resolved |
-| CDC Pipeline Details | `cdc-details` | Every Oracle, Debezium, Kafka and cdc-es-sync metric as stats and charts (the "View details" target) |
-| CDC Archive Log Storage | `cdc-archive` | Recovery area usage, archive generation rate, retention, archive destination status, and whether the connector can still resume |
+| Kafka & CDC Operations Center | `cdc-ops` | Is the platform healthy? Banner verdict, KPI tiles, **connector fleet table**, **Debezium engine table**, health cards for connectors / Kafka / consumers, 24h alert history, JVM resources |
+| Debezium Connectors | `cdc-connectors` | Which connector or task is failing, and since when? Connector and task state timelines, source lag, events by operation, queue usage, snapshot, Oracle LogMiner, task throughput, errors / retries / DLQ, workers and rebalances |
+| Kafka Cluster | `kafka-cluster` | Is the broker healthy and fast enough? KRaft controller, offline / under-replicated / under-min-ISR partitions, throughput, request latency breakdown, thread-pool saturation, replication, storage, JVM and containers |
+| Topics & Consumer Groups | `kafka-topics` | Who is falling behind? Topic inventory (partitions, replicas, rate, retained messages, size), consumer group lag, consume rate, catch-up time, inactive groups |
 
-The section gauges show the share of health checks that pass: Oracle (open, ARCHIVELOG, archive destination valid, FRA under 90%), Debezium (connected, task running, no failed task, lag under 30 s), Kafka (broker up, no under-replicated partitions, consumer lag under 1000, exporter up).
+## Connector health, as shown everywhere
+
+A connector can be `RUNNING` while all its tasks are `FAILED` (Kafka Connect never restarts a failed task), so the
+dashboards and alerts use a combined **Health**:
+
+| Health | Meaning |
+|---|---|
+| OK | connector RUNNING and every task RUNNING |
+| PAUSED | paused or stopped on purpose |
+| DEGRADED | RUNNING but a task FAILED or is missing, or UNASSIGNED / RESTARTING |
+| FAILED | the connector itself FAILED |
+
+Debezium's own metrics are keyed by the **logical server name** (`topic.prefix`), not the connector name. To show the
+connector name in the engine table, add `"custom.metric.tags": "connector=<connector name>"` to the connector config.
 
 ## Start
 
-1. Create the read-only Oracle user (once, as SYSDBA): `sqlplus / as sysdba @dba_scripts/dba_cdc_04_monitoring_user.sql`
-2. In `Packages/cdc/.env` set `ORACLE_MON_USER=c%23%23cdcmon` (the `#` is written `%23`) and `ORACLE_MON_PASSWORD`.
-3. `docker compose --profile monitoring up -d`
-4. Grafana: `http://<host>:3000` (user `admin`, password `GRAFANA_PASSWORD`, default `change-me`: change it). Prometheus: `http://127.0.0.1:9090`.
+```
+docker compose build kafka connect          # bakes the JMX exporter rules into the images
+docker compose up -d
+docker compose --profile monitoring up -d   # kafka-exporter, cAdvisor, Prometheus, Grafana
+```
 
-Without step 1-2 everything works except the Oracle panels, which show NO DATA, and the overall status tile shows "Attention needed".
+Grafana: `http://<host>:3000` (user `admin`, password `GRAFANA_PASSWORD`, default `change-me`: change it).
+Prometheus: `http://127.0.0.1:${PROMETHEUS_PORT:-9090}`. Rebuilding `kafka` restarts the broker: plan a short window.
 
 ## Where the data comes from
 
 | Prometheus job | Source | Gives |
 |---|---|---|
-| `oracle` | `oracle-exporter` running `oracle/custom-metrics.toml` | FRA usage, archive log volume and retention, archive destination, DB/PDB state, SCN |
-| `connect-jmx` | Connect JMX exporter | Debezium lag, LogMiner connection, connector/task state |
-| `kafka`, `kafka-jmx` | kafka-exporter, Kafka JMX | Brokers, topics, consumer lag |
-| `cdc-es-sync` | `host.docker.internal:9108` | Events, documents written, errors, dead letters, lag |
+| `kafka` | kafka-exporter | Brokers, topics, partitions, consumer group offsets, lag and members |
+| `kafka-jmx` | broker JMX exporter (`dockerfiles/kafka/jmx-exporter.yml`) | KRaft controller, partition health, throughput, request latency, saturation, log size, JVM |
+| `connect-jmx` | Connect JMX exporter (`dockerfiles/connect/jmx-exporter.yml`) | Connector / task state, task throughput, errors, DLQ, producer, rebalances, every Debezium engine, JVM |
+| `containers` | cAdvisor | Container CPU and memory (Linux Docker hosts only) |
 
-`cdc-es-sync` runs in its own compose project, so Prometheus reaches it through the host's published port 9108.
+The JMX rules are explicit and anchored: label values never end up in metric names, cumulative `*-total` attributes
+are counters (use `rate()`), and anything not listed is not exported. Add every extra Connect worker to the
+`connect-jmx` job in `prometheus.yml`.
 
-The `containers` job (cAdvisor) is scraped but no panel uses it. On Docker Desktop cAdvisor reports containers by cgroup id only, so there are no container names to chart. On a Linux host the `name` label is present and a CPU/memory row can be added.
+### Using a central Grafana instead
 
-Elasticsearch itself is not monitored here (only the sync service that writes to it). `check-cdc.ps1` covers Elasticsearch health.
-
-When Oracle cannot be reached, every Oracle panel shows a grey NO DATA and the top banner reads "Attention needed". Both are intended.
-
-## Archive log storage (what the client asked to track)
-
-- **FRA used %**: warning at 80%, critical at 90%. When the recovery area is full Oracle stops archiving.
-- **Hours until full**: free plus reclaimable space divided by the last hour's archive rate.
-- **Archive destination**: must be `VALID`. `ERROR` (for example ORA-16032) stops Debezium from starting.
-- **Retention**: age of the oldest archive log still on disk.
-- **Connector can resume**: `AT RISK` means the archive log holding the connector's position was deleted. After a restart the connector fails with "no longer available on the server" and needs an offset reset (runbook item 1).
+Point the central Grafana at this Prometheus (or remote-write this Prometheus to the central one), import the four
+JSON files from `grafana/dashboards/`, and choose that data source in the **Data source** drop-down.
 
 ## Alerts
 
-`alerts.yml` has 16 rules, shown in the "Firing alerts" table and counted in "Active alerts". Prometheus only evaluates them. Nothing sends email or chat yet: that needs Alertmanager or Grafana contact points, which depends on where the client wants notifications.
+`alerts.yml` has 26 rules in five groups (kafka, kafka-connect, debezium, consumers, monitoring), shown in the alert
+history table. Every connector-level rule carries the `connector` or Debezium `name` label, so the same rules cover
+all teams' connectors. Prometheus only evaluates them; sending email / chat needs Alertmanager or Grafana contact points.
 
 ## Changing a dashboard
 
-Edit `grafana/build-dashboards.mjs`, run `node build-dashboards.mjs`, commit the script and the JSON. Grafana reloads the files within 30 seconds. Dashboards are read-only in the UI (`allowUiUpdates: false`).
+Edit `grafana/build-dashboards.mjs`, run `node build-dashboards.mjs`, commit the script and the JSON. The script
+deletes and rewrites every JSON file, so a removed dashboard disappears from Grafana too. Grafana reloads the files
+within 30 seconds. Dashboards are read-only in the UI (`allowUiUpdates: false`).

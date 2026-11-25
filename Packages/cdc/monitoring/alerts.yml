@@ -1,97 +1,163 @@
+# Alerts for the central Kafka + Kafka Connect / Debezium platform. Labels: severity (critical|warning|info) and
+# component (kafka|connect|debezium|consumer|jvm|monitoring). Every connector-level alert carries the connector or
+# Debezium server label, so one rule covers all teams' connectors.
 groups:
-  - name: cdc-oracle
+  - name: kafka
     rules:
-      - alert: OracleExporterDown
-        expr: oracledb_up == 0 or absent(oracledb_up)
-        for: 2m
-        labels: { severity: critical, component: oracle }
-        annotations: { summary: "Cannot read Oracle metrics", description: "oracle-exporter cannot connect to Oracle, or is not running. Archive log storage is not being monitored." }
-
-      - alert: ArchiveDestinationInvalid
-        expr: min(oracledb_archive_dest_valid) == 0
-        for: 2m
-        labels: { severity: critical, component: oracle }
-        annotations: { summary: "Archive destination is not VALID", description: "A LOCAL archive destination has an error (for example ORA-16032). Debezium cannot start, and Oracle may stop accepting changes when redo logs cannot be archived." }
-
-      - alert: ArchivelogModeOff
-        expr: oracledb_db_archivelog == 0
+      - alert: KafkaBrokerDown
+        expr: up{job="kafka-jmx"} == 0
         for: 1m
-        labels: { severity: critical, component: oracle }
-        annotations: { summary: "Database is not in ARCHIVELOG mode", description: "Debezium LogMiner CDC needs ARCHIVELOG mode." }
+        labels: { severity: critical, component: kafka }
+        annotations: { summary: "Kafka broker {{ $labels.instance }} is not reachable" }
 
-      - alert: FraUsageHigh
-        expr: oracledb_fra_used_bytes / oracledb_fra_limit_bytes > 0.80
-        for: 10m
-        labels: { severity: warning, component: archive-storage }
-        annotations: { summary: "Recovery area above 80% ({{ $value | humanizePercentage }})", description: "Archive logs fill the recovery area. Check RMAN deletion and db_recovery_file_dest_size." }
+      - alert: KafkaNoActiveController
+        expr: sum(kafka_controller_kafkacontroller_activecontrollercount) != 1
+        for: 1m
+        labels: { severity: critical, component: kafka }
+        annotations: { summary: "{{ $value }} active KRaft controllers (expected exactly 1)" }
 
-      - alert: FraUsageCritical
-        expr: oracledb_fra_used_bytes / oracledb_fra_limit_bytes > 0.90
-        for: 5m
-        labels: { severity: critical, component: archive-storage }
-        annotations: { summary: "Recovery area above 90% ({{ $value | humanizePercentage }})", description: "When it is full, Oracle stops archiving and the database can hang. Free space or enlarge the recovery area now." }
+      - alert: KafkaOfflinePartitions
+        expr: sum(kafka_controller_kafkacontroller_offlinepartitionscount) > 0
+        for: 1m
+        labels: { severity: critical, component: kafka }
+        annotations: { summary: "{{ $value }} partitions have no leader: produce and consume fail on them" }
 
-      - alert: FraFullWithin6Hours
-        expr: (oracledb_fra_limit_bytes - oracledb_fra_used_bytes + oracledb_fra_reclaimable_bytes) / clamp_min(oracledb_archive_log_bytes_last_hour, 1) < 6
-        for: 15m
-        labels: { severity: warning, component: archive-storage }
-        annotations: { summary: "Recovery area full in about {{ $value | humanize }} hours", description: "At the archive log rate of the last hour, free plus reclaimable space runs out within 6 hours." }
-
-      - alert: ConnectorBehindOldestArchiveLog
-        expr: debezium_metrics_offsetscn{context="streaming"} < scalar(oracledb_archive_log_oldest_scn) and on() (oracledb_archive_log_oldest_scn > 0)
-        for: 5m
-        labels: { severity: critical, component: archive-storage }
-        annotations: { summary: "Connector position is older than the oldest archive log", description: "The archive log holding the connector offset was deleted. After a restart the connector cannot resume (the 'no longer available on the server' error) and needs an offset reset." }
-
-  - name: cdc-pipeline
-    rules:
-      - alert: ConnectorTaskNotRunning
-        expr: kafka_connect_worker_connector_failed_task_count > 0 or absent(kafka_connect_worker_connector_running_task_count{connector="emob-oracle-cdc"}) or kafka_connect_worker_connector_running_task_count{connector="emob-oracle-cdc"} < 1
+      - alert: KafkaUnderMinIsrPartitions
+        expr: sum(kafka_server_replicamanager_underminisrpartitioncount) > 0
         for: 2m
-        labels: { severity: critical, component: debezium }
-        annotations: { summary: "Debezium task is not running", description: "Task FAILED or missing. Check GET /connectors/emob-oracle-cdc/status and the Connect log, then restart the task." }
+        labels: { severity: critical, component: kafka }
+        annotations: { summary: "{{ $value }} partitions are under min.insync.replicas: acks=all producers (Connect) fail" }
 
+      - alert: KafkaUnderReplicatedPartitions
+        expr: sum(kafka_server_replicamanager_underreplicatedpartitions) > 0
+        for: 5m
+        labels: { severity: warning, component: kafka }
+        annotations: { summary: "{{ $value }} under-replicated partitions" }
+
+      - alert: KafkaRequestHandlerSaturated
+        expr: min(kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent) < 0.2
+        for: 10m
+        labels: { severity: warning, component: kafka }
+        annotations: { summary: "Broker request handlers less than 20% idle" }
+
+      - alert: KafkaProduceLatencyHigh
+        expr: max(kafka_network_requestmetrics_totaltimems_p99{request="Produce"}) > 1000
+        for: 10m
+        labels: { severity: warning, component: kafka }
+        annotations: { summary: "Produce p99 latency {{ $value }} ms" }
+
+      - alert: JvmHeapHigh
+        expr: 100 * sum by (job, instance) (jvm_memory_used_bytes{area="heap"}) / sum by (job, instance) (jvm_memory_max_bytes{area="heap"}) > 90
+        for: 10m
+        labels: { severity: warning, component: jvm }
+        annotations: { summary: "{{ $labels.job }} heap above 90% ({{ $value | humanize }}%)" }
+
+  - name: kafka-connect
+    rules:
+      - alert: ConnectWorkerDown
+        expr: up{job="connect-jmx"} == 0
+        for: 1m
+        labels: { severity: critical, component: connect }
+        annotations: { summary: "Kafka Connect worker {{ $labels.instance }} is down: none of its connectors run" }
+
+      - alert: ConnectorFailed
+        expr: kafka_connect_connector_status{status="failed"} == 1
+        for: 1m
+        labels: { severity: critical, component: connect }
+        annotations: { summary: "Connector {{ $labels.connector }} is FAILED", description: "GET /connectors/{{ $labels.connector }}/status shows the trace." }
+
+      - alert: ConnectorTaskFailed
+        expr: sum by (connector) (kafka_connect_worker_connector_failed_task_count) > 0
+        for: 2m
+        labels: { severity: critical, component: connect }
+        annotations: { summary: "Connector {{ $labels.connector }} has {{ $value }} FAILED task(s)", description: "Kafka Connect never restarts a failed task. Check the trace, fix the cause, then POST /connectors/{{ $labels.connector }}/restart?includeTasks=true&onlyFailed=true" }
+
+      - alert: ConnectorTasksNotRunning
+        expr: (sum by (connector) (kafka_connect_worker_connector_running_task_count) < sum by (connector) (kafka_connect_worker_connector_total_task_count)) and on (connector) (max by (connector) (kafka_connect_connector_status{status="running"}) == 1)
+        for: 5m
+        labels: { severity: warning, component: connect }
+        annotations: { summary: "Connector {{ $labels.connector }} has tasks that are not RUNNING (unassigned or restarting)" }
+
+      - alert: ConnectorPaused
+        expr: kafka_connect_connector_status{status=~"paused|stopped"} == 1
+        for: 30m
+        labels: { severity: info, component: connect }
+        annotations: { summary: "Connector {{ $labels.connector }} has been {{ $labels.status }} for 30 minutes" }
+
+      - alert: ConnectorRecordErrors
+        expr: sum by (connector) (increase(kafka_connect_task_error_total_record_errors_total[10m])) > 0
+        labels: { severity: warning, component: connect }
+        annotations: { summary: "Connector {{ $labels.connector }}: {{ $value }} record errors in 10 minutes" }
+
+      - alert: ConnectorProducerErrors
+        expr: sum by (connector) (increase(kafka_connect_producer_record_error_total[10m])) > 0
+        labels: { severity: warning, component: connect }
+        annotations: { summary: "Connector {{ $labels.connector }} could not write {{ $value }} records to Kafka in 10 minutes" }
+
+      - alert: ConnectStartupFailures
+        expr: sum by (instance) (increase(kafka_connect_worker_connector_startup_failure_total[15m]) + increase(kafka_connect_worker_task_startup_failure_total[15m])) > 0
+        labels: { severity: warning, component: connect }
+        annotations: { summary: "Connector or task startup failed on {{ $labels.instance }}" }
+
+      - alert: ConnectRebalanceStuck
+        expr: max(kafka_connect_worker_rebalance_rebalancing) == 1
+        for: 5m
+        labels: { severity: warning, component: connect }
+        annotations: { summary: "Kafka Connect has been rebalancing for 5 minutes: no task runs during a rebalance" }
+
+  - name: debezium
+    rules:
       - alert: DebeziumDisconnected
         expr: debezium_metrics_connected{context="streaming"} == 0
         for: 2m
         labels: { severity: critical, component: debezium }
-        annotations: { summary: "Debezium lost its Oracle connection" }
+        annotations: { summary: "Debezium {{ $labels.name }} lost its connection to the source database" }
 
-      - alert: CdcLagHigh
+      - alert: DebeziumSourceLagHigh
         expr: debezium_metrics_millisecondsbehindsource{context="streaming"} > 30000
         for: 5m
         labels: { severity: warning, component: debezium }
-        annotations: { summary: "Source lag above 30s ({{ $value | humanizeDuration }})", description: "Debezium is behind the Oracle redo stream." }
+        annotations: { summary: "Debezium {{ $labels.name }} is {{ $value }} ms behind the source" }
 
-      - alert: KafkaBrokerDown
-        expr: up{job="kafka"} == 0 or kafka_brokers < 1
-        for: 1m
-        labels: { severity: critical, component: kafka }
-        annotations: { summary: "Kafka broker not reachable" }
-
-      - alert: UnderReplicatedPartitions
-        expr: sum(kafka_topic_partition_under_replicated_partition) > 0
+      - alert: DebeziumSourceLagCritical
+        expr: debezium_metrics_millisecondsbehindsource{context="streaming"} > 300000
         for: 5m
-        labels: { severity: warning, component: kafka }
-        annotations: { summary: "Kafka has under-replicated partitions" }
+        labels: { severity: critical, component: debezium }
+        annotations: { summary: "Debezium {{ $labels.name }} is more than 5 minutes behind the source" }
 
-      - alert: SyncConsumerLagHigh
-        expr: sum(cdc_consumer_lag) > 1000
-        for: 10m
-        labels: { severity: warning, component: target-apply }
-        annotations: { summary: "cdc-es-sync is more than 1000 messages behind" }
-
-      - alert: SyncStalled
-        expr: (time() - cdc_last_batch_timestamp > 600) and on() (sum(cdc_consumer_lag) > 0)
+      - alert: DebeziumQueueSaturated
+        expr: debezium_metrics_queueremainingcapacity{context="streaming"} / debezium_metrics_queuetotalcapacity{context="streaming"} < 0.1
         for: 5m
-        labels: { severity: critical, component: target-apply }
-        annotations: { summary: "cdc-es-sync has not committed a batch for 10 minutes while messages are waiting" }
+        labels: { severity: warning, component: debezium }
+        annotations: { summary: "Debezium {{ $labels.name }} queue is over 90% full: Kafka is the bottleneck" }
 
-      - alert: SyncErrors
-        expr: sum(increase(cdc_errors_total[10m])) > 0 or sum(increase(cdc_dlq_total[10m])) > 0
-        labels: { severity: warning, component: target-apply }
-        annotations: { summary: "cdc-es-sync reported errors or dead-lettered events" }
+      - alert: DebeziumErrors
+        expr: sum by (name) (increase(debezium_metrics_numberoferroneousevents{context="streaming"}[10m])) > 0 or sum by (name) (increase(debezium_metrics_errorcount{context="streaming"}[10m])) > 0
+        labels: { severity: warning, component: debezium }
+        annotations: { summary: "Debezium {{ $labels.name }} reported capture errors in the last 10 minutes" }
 
+  - name: consumers
+    rules:
+      - alert: ConsumerGroupLagHigh
+        expr: sum by (consumergroup) (clamp_min(kafka_consumergroup_lag, 0)) > 10000
+        for: 15m
+        labels: { severity: warning, component: consumer }
+        annotations: { summary: "Consumer group {{ $labels.consumergroup }} is {{ $value }} messages behind" }
+
+      - alert: ConsumerGroupLagGrowing
+        expr: deriv(sum by (consumergroup) (clamp_min(kafka_consumergroup_lag, 0))[15m:1m]) > 0 and sum by (consumergroup) (clamp_min(kafka_consumergroup_lag, 0)) > 1000
+        for: 15m
+        labels: { severity: warning, component: consumer }
+        annotations: { summary: "Consumer group {{ $labels.consumergroup }} keeps falling behind" }
+
+      - alert: ConsumerGroupInactive
+        expr: max by (consumergroup) (kafka_consumergroup_members) == 0 and on (consumergroup) sum by (consumergroup) (clamp_min(kafka_consumergroup_lag, 0)) > 0
+        for: 15m
+        labels: { severity: warning, component: consumer }
+        annotations: { summary: "Consumer group {{ $labels.consumergroup }} has unread messages and no running consumer" }
+
+  - name: monitoring
+    rules:
       - alert: ScrapeTargetDown
         expr: up == 0
         for: 3m

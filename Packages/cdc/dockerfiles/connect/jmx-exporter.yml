@@ -1,24 +1,98 @@
+# Prometheus JMX exporter rules for Kafka Connect workers running Debezium (and any other connector plugin).
+#
+# Every pattern is anchored on the attribute name ("<>attribute:"), so each MBean attribute maps to exactly one series.
+# Cumulative "*-total" attributes are exported as COUNTER (exposed as <name>_total): always query them with rate().
+# Attributes that are not matched by a rule are NOT exported, which keeps cardinality bounded.
 lowercaseOutputName: true
 lowercaseOutputLabelNames: true
 rules:
-  # Debezium: snapshot / streaming metrics (e.g. MilliSecondsBehindSource, QueueRemainingCapacity)
-  - pattern: 'debezium.([^:]+)<type=connector-metrics, context=([^,]+), server=([^,>]+)(?:, task=([^>]+))?><>([^:]+)'
-    name: debezium_metrics_$5
+  # ---- Debezium (all plugins: oracle, postgres, mysql, sqlserver, ...) -------------------------------------------------
+  # debezium.<plugin>:type=connector-metrics,context=<snapshot|streaming|schema-history>,server=<topic.prefix>[,task=<n>]
+  # The key order differs per plugin (SQL Server: server,task,context,database), so every key is read with a lookahead.
+  # Optional keys that are absent produce no label. The custom tag "connector=<name>" (connector property
+  # custom.metric.tags=connector=<name>) is kept so a Debezium engine can be joined to its Kafka Connect connector.
+  - pattern: 'debezium\.([^:]+)<type=connector-metrics(?=[^>]*, context=([^,>]+))(?=[^>]*, server=([^,>]+))(?=(?:[^>]*, task=([^,>]+))?)(?=(?:[^>]*, database=([^,>]+))?)(?=(?:[^>]*, connector=([^,>]+))?)[^>]*><>(\w+):'
+    name: debezium_metrics_$7
     type: GAUGE
-    labels: { plugin: "$1", context: "$2", name: "$3", task: "$4" }
-  # Kafka Connect worker / connector / task metrics
-  - pattern: 'kafka.connect<type=connector-task-metrics, connector=([^,]+), task=([^>]+)><>(running-ratio|pause-ratio|batch-size-avg|batch-size-max|offset-commit-avg-time-ms|offset-commit-failure-percentage)'
+    labels: { plugin: "$1", context: "$2", name: "$3", task: "$4", database: "$5", connector: "$6" }
+
+  # ---- Connector and task state (string attributes exported as 1 with the value as a label) --------------------------
+  - pattern: 'kafka\.connect<type=connector-metrics, connector=([^>]+)><>status: ([a-z-]+)'
+    name: kafka_connect_connector_status
+    type: GAUGE
+    value: 1
+    labels: { connector: "$1", status: "$2" }
+  - pattern: 'kafka\.connect<type=connector-metrics, connector=([^>]+)><>connector-(class|type|version): (.+)'
+    name: kafka_connect_connector_$2
+    type: GAUGE
+    value: 1
+    labels: { connector: "$1", "$2": "$3" }
+  - pattern: 'kafka\.connect<type=connector-task-metrics, connector=([^,]+), task=([^>]+)><>status: ([a-z-]+)'
+    name: kafka_connect_connector_task_status
+    type: GAUGE
+    value: 1
+    labels: { connector: "$1", task: "$2", status: "$3" }
+
+  # ---- Worker -------------------------------------------------------------------------------------------------------
+  - pattern: 'kafka\.connect<type=connect-worker-metrics><>(connector-count|task-count):'
+    name: kafka_connect_worker_$1
+    type: GAUGE
+  - pattern: 'kafka\.connect<type=connect-worker-metrics><>((?:connector|task)-startup-(?:attempts|failure|success))-total:'
+    name: kafka_connect_worker_$1
+    type: COUNTER
+  - pattern: 'kafka\.connect<type=connect-worker-metrics, connector=([^>]+)><>connector-(total|running|paused|failed|restarting|unassigned|destroyed)-task-count:'
+    name: kafka_connect_worker_connector_$2_task_count
+    type: GAUGE
+    labels: { connector: "$1" }
+  - pattern: 'kafka\.connect<type=connect-worker-rebalance-metrics><>(rebalancing|epoch|rebalance-avg-time-ms|rebalance-max-time-ms|time-since-last-rebalance-ms):'
+    name: kafka_connect_worker_rebalance_$1
+    type: GAUGE
+  - pattern: 'kafka\.connect<type=connect-worker-rebalance-metrics><>completed-rebalances-total:'
+    name: kafka_connect_worker_rebalance_completed_rebalances
+    type: COUNTER
+
+  # ---- Task performance (all connector types) -------------------------------------------------------------------------
+  - pattern: 'kafka\.connect<type=connector-task-metrics, connector=([^,]+), task=([^>]+)><>(running-ratio|pause-ratio|batch-size-avg|batch-size-max|offset-commit-avg-time-ms|offset-commit-max-time-ms|offset-commit-failure-percentage|offset-commit-success-percentage):'
     name: kafka_connect_task_$3
     type: GAUGE
     labels: { connector: "$1", task: "$2" }
-  - pattern: 'kafka.connect<type=source-task-metrics, connector=([^,]+), task=([^>]+)><>(source-record-poll-total|source-record-write-total|source-record-active-count|poll-batch-avg-time-ms)'
-    name: kafka_connect_source_$3
+
+  # ---- Source tasks -------------------------------------------------------------------------------------------------
+  - pattern: 'kafka\.connect<type=source-task-metrics, connector=([^,]+), task=([^>]+)><>(source-record-poll|source-record-write)-total:'
+    name: kafka_connect_source_task_$3
+    type: COUNTER
+    labels: { connector: "$1", task: "$2" }
+  - pattern: 'kafka\.connect<type=source-task-metrics, connector=([^,]+), task=([^>]+)><>(source-record-active-count|poll-batch-avg-time-ms|poll-batch-max-time-ms):'
+    name: kafka_connect_source_task_$3
     type: GAUGE
     labels: { connector: "$1", task: "$2" }
-  - pattern: 'kafka.connect<type=connect-worker-metrics><>(connector-count|task-count|connector-startup-failure-total|task-startup-failure-total)'
-    name: kafka_connect_worker_$1
+
+  # ---- Sink tasks ---------------------------------------------------------------------------------------------------
+  - pattern: 'kafka\.connect<type=sink-task-metrics, connector=([^,]+), task=([^>]+)><>(sink-record-read|sink-record-send|offset-commit-completion|offset-commit-skip)-total:'
+    name: kafka_connect_sink_task_$3
+    type: COUNTER
+    labels: { connector: "$1", task: "$2" }
+  - pattern: 'kafka\.connect<type=sink-task-metrics, connector=([^,]+), task=([^>]+)><>(sink-record-active-count|sink-record-lag-max|partition-count|put-batch-avg-time-ms|put-batch-max-time-ms):'
+    name: kafka_connect_sink_task_$3
     type: GAUGE
-  - pattern: 'kafka.connect<type=connect-worker-metrics, connector=([^>]+)><>(connector-total-task-count|connector-running-task-count|connector-failed-task-count|connector-paused-task-count)'
-    name: kafka_connect_worker_$2
+    labels: { connector: "$1", task: "$2" }
+
+  # ---- Task errors and dead letter queue (errors.tolerance / errors.deadletterqueue.*) ---------------------------------
+  - pattern: 'kafka\.connect<type=task-error-metrics, connector=([^,]+), task=([^>]+)><>(total-record-errors|total-record-failures|total-records-skipped|total-retries|total-errors-logged|deadletterqueue-produce-requests|deadletterqueue-produce-failures):'
+    name: kafka_connect_task_error_$3
+    type: COUNTER
+    labels: { connector: "$1", task: "$2" }
+  - pattern: 'kafka\.connect<type=task-error-metrics, connector=([^,]+), task=([^>]+)><>last-error-timestamp:'
+    name: kafka_connect_task_error_last_error_timestamp
     type: GAUGE
-    labels: { connector: "$1" }
+    labels: { connector: "$1", task: "$2" }
+
+  # ---- Producer of each source task (client-id connector-producer-<connector>-<task>) ---------------------------------
+  - pattern: 'kafka\.producer<type=producer-metrics, client-id=connector-producer-(.+)-(\d+)><>(record-send|record-error|record-retry)-total:'
+    name: kafka_connect_producer_$3
+    type: COUNTER
+    labels: { connector: "$1", task: "$2" }
+  - pattern: 'kafka\.producer<type=producer-metrics, client-id=connector-producer-(.+)-(\d+)><>(request-latency-avg|request-latency-max|outgoing-byte-rate|batch-size-avg|record-queue-time-avg|buffer-available-bytes|buffer-total-bytes):'
+    name: kafka_connect_producer_$3
+    type: GAUGE
+    labels: { connector: "$1", task: "$2" }
