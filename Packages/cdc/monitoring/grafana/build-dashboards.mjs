@@ -2,13 +2,15 @@
 // Edit the panels here, regenerate, and commit both this file and the JSON. Grafana reloads the JSON every 30s.
 //
 // Dashboard hierarchy (overview first, then one drill-down per component, as Strimzi / Confluent dashboards do):
-//   cdc-ops         Kafka & CDC Operations Center   platform verdict, KPI tiles, connector fleet, Debezium engines
-//   cdc-connectors  Debezium Connectors              connector/task state over time, streaming, snapshot, errors
-//   kafka-cluster   Kafka Cluster                    KRaft and partition health, throughput, latency, saturation
-//   kafka-topics    Topics & Consumer Groups         topic inventory, consumer lag and catch-up time
+//   kafka-command-center  Kafka Stack Command Center  the whole stack on one screen: resources, pipeline flow,
+//                                                      connector and task walls, auto-recovery, lag, latency, alerts
+//   cdc-connectors        Debezium Connectors          connector/task state over time, streaming, snapshot, errors
+//   kafka-cluster         Kafka Cluster                KRaft and partition health, throughput, latency, saturation
+//   kafka-topics          Topics & Consumer Groups     topic inventory, consumer lag and catch-up time
 //
 // Metric sources (see ../prometheus.yml): kafka-exporter (job "kafka"), broker JMX ("kafka-jmx"), Connect/Debezium
-// JMX ("connect-jmx"), cAdvisor ("containers"). The JMX rules are in ../../dockerfiles/{kafka,connect}/jmx-exporter.yml.
+// JMX ("connect-jmx"), cAdvisor ("containers"), node-exporter ("node"), connect-guardian ("connect-guardian").
+// The JMX rules are in ../../dockerfiles/{kafka,connect}/jmx-exporter.yml.
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -88,6 +90,22 @@ function builder() {
       targets: withRef([target(expr, o.label ?? "", true)]),
       fieldConfig: { defaults: { unit: o.unit ?? "percent", min: 0, max: o.max ?? 100, decimals: o.decimals ?? 1, displayName: o.label, thresholds: o.thresholds ?? OK_WARN_CRIT, color: { mode: "thresholds" }, mappings: [NO_DATA], noValue: "NO DATA" }, overrides: [] },
       options: { reduceOptions: { calcs: ["lastNotNull"] }, showThresholdMarkers: false, showThresholdLabels: false, sizing: "auto", minVizWidth: 75, minVizHeight: 75, text: { valueSize: o.valueSize ?? 30 } },
+    }),
+
+    // Horizontal bars, one per series, filled up to max (e.g. memory used of limit per container)
+    bars: (title, expr, legend, [x, y, w, h], o = {}) => add({
+      type: "bargauge", title, description: o.desc, gridPos: { x, y, w, h }, links: o.links,
+      targets: withRef([target(expr, legend, true)]),
+      fieldConfig: { defaults: { unit: o.unit ?? "percent", min: 0, max: o.max ?? 100, decimals: o.decimals ?? 0, thresholds: o.thresholds ?? OK_WARN_CRIT, color: { mode: "thresholds" }, mappings: [], noValue: o.noValue ?? "NO DATA" }, overrides: [] },
+      options: { displayMode: "gradient", orientation: "horizontal", valueMode: "color", namePlacement: "left", showUnfilled: true, sizing: "manual", minVizHeight: 14, maxVizHeight: 22, minVizWidth: 8, reduceOptions: { calcs: ["lastNotNull"] }, legend: { showLegend: false }, text: { titleSize: 12, valueSize: 13 } },
+    }),
+
+    // A status wall: one coloured tile per series (connector, task), named by the legend
+    wall: (title, expr, legend, [x, y, w, h], o = {}) => add({
+      type: "stat", title, description: o.desc, gridPos: { x, y, w, h }, links: o.links,
+      targets: withRef([target(expr, legend, true)]),
+      fieldConfig: { defaults: { unit: "none", thresholds: steps(["gray"]), mappings: withNoData(o.mappings), noValue: o.noValue ?? "NO DATA", color: { mode: "thresholds" } }, overrides: [] },
+      options: { colorMode: "background", graphMode: "none", textMode: "value_and_name", orientation: "auto", wideLayout: true, justifyMode: "center", reduceOptions: { calcs: ["lastNotNull"] }, text: { titleSize: 13, valueSize: 18 } },
     }),
 
     ts: (title, targets, [x, y, w, h], o = {}) => add({
@@ -211,7 +229,7 @@ function builder() {
 }
 
 // ---- dashboard shell -----------------------------------------------------------------------------------------------
-const NAV = [["Operations Center", "/d/cdc-ops"], ["Debezium Connectors", "/d/cdc-connectors"], ["Kafka Cluster", "/d/kafka-cluster"], ["Topics & Consumers", "/d/kafka-topics"]];
+const NAV = [["Command Center", "/d/kafka-command-center"], ["Debezium Connectors", "/d/cdc-connectors"], ["Kafka Cluster", "/d/kafka-cluster"], ["Topics & Consumers", "/d/kafka-topics"]];
 const queryVar = (name, label, query, regex = "") => ({
   name, label, type: "query", datasource: DS, query, definition: query, regex, refresh: 2, sort: 1,
   multi: true, includeAll: true, allValue: ".*", current: { selected: true, text: ["All"], value: ["$__all"] }, hide: 0,
@@ -325,6 +343,11 @@ const ALERT_TEXT = {
   DebeziumQueueSaturated: "Debezium queue almost full", DebeziumErrors: "Debezium capture errors",
   ConsumerGroupLagHigh: "Consumer group lag above 10k", ConsumerGroupLagGrowing: "Consumer group falling behind", ConsumerGroupInactive: "Consumer group has no members",
   ScrapeTargetDown: "A metrics target is down",
+  ConnectGuardianDown: "Auto-recovery (connect-guardian) is down", ConnectorNeedsAttention: "Connector cannot recover by itself",
+  ConnectorRestartLoop: "Connector keeps failing after restarts", ConnectorOffsetsReset: "Connector lost its position and was reset",
+  ConnectorCaptureStalled: "Connector capture stalled and was restarted",
+  HostDiskSpaceLow: "Data disk above 75%", HostDiskSpaceCritical: "Data disk above 85%", HostMemoryLow: "Host memory below 10% available",
+  HostCpuSaturated: "Host CPU above 90%",
 };
 
 // ---- shared tables -------------------------------------------------------------------------------------------------
@@ -391,96 +414,151 @@ const engineTable = (b, pos) => b.table("Debezium capture engines (by logical se
 });
 
 // =====================================================================================================================
-// Dashboard 1: Kafka & CDC Operations Center (the entry point)
+// Dashboard 1: Kafka Stack Command Center (the entry point: the whole stack on one screen)
 // =====================================================================================================================
-const ops = builder();
+// Host and container resources (node-exporter job "node", cAdvisor job "containers")
+const HOST_CPU = '100 * (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])))';
+// Available memory counts the page cache as free: the kernel gives it back on demand, and Kafka depends on it
+const HOST_RAM = "100 * (1 - max(node_memory_MemAvailable_bytes) / max(node_memory_MemTotal_bytes))";
+// The filesystem that holds the Docker volumes (Kafka data): "/" unless /var or /var/lib/docker is mounted separately
+const DATA_FS = 'mountpoint=~"/|/var|/var/lib|/var/lib/docker",fstype!~"tmpfs|overlay|squashfs"';
+const HOST_DISK = `max(100 * (1 - node_filesystem_avail_bytes{${DATA_FS}} / node_filesystem_size_bytes{${DATA_FS}}))`;
+// Stack containers: the fixed names of the core services plus the compose-named monitoring ones (cdc-<service>-1)
+const STACK = 'name=~"kafka|connect|connect-guardian|kafka-ui|cdc-.+"';
+const shortName = (e) => `label_replace(${e}, "name", "$1", "name", "cdc-(.+)-[0-9]+")`;
+const CONTAINER_MEM = shortName(`100 * max by (name) (container_memory_working_set_bytes{${STACK}}) / max by (name) (container_spec_memory_limit_bytes{${STACK}} > 0)`);
+
+// The pipeline: captured by Debezium -> written to Kafka -> waiting for consumers -> consumed
+const CAPTURED = `sum(rate(${dbz("totalnumberofeventsseen", ALL_SERVERS)}[5m])) or on() vector(0)`;
+const WRITTEN = "sum(rate(kafka_connect_source_task_source_record_write_total[5m])) or on() vector(0)";
+const ALL_LAG = GROUP_LAG('consumergroup=~".+"'), ALL_RATE = GROUP_RATE('consumergroup=~".+"');
+const CONSUMED = `sum(${ALL_RATE}) or on() vector(0)`;
+// Worst group: lag / consume rate. A group with lag and no consumption has no finite catch-up time (-2: STALLED).
+const CATCH_UP = `max(${ALL_LAG} / (${ALL_RATE} > 0)) or (max(${ALL_LAG} > 0) * 0 - 2) or on() vector(0)`;
+
+// connect-guardian: automatic recovery per connector (see ../../guardian/README.md)
+const GUARD = (m, f = CF) => `max by (connector) (connect_guardian_${m}{${f}})`;
+const GUARD_MAP = [valueMap([[0, "WATCHING", "green"], [1, "RECOVERING", "orange"], [2, "NEEDS A PERSON", "red"], [3, "PARKED", "blue"], [4, "OFF", "gray"]])];
+const guardActions = (action, w = "24h") => `sum(increase(connect_guardian_actions_total{action="${action}"}[${w}])) or on() vector(0)`;
+
+const PLATFORM_OK = `(${[`clamp_max(${BROKERS}, 1)`, `${ACTIVE_CTRL} == bool 1`, `(${OFFLINE}) == bool 0`, `(${UNDER_MIN_ISR}) == bool 0`, 'clamp_max(max(up{job="connect-jmx"}), 1)', `(${CONNECTORS_BAD}) == bool 0`, `(${ENGINES_DOWN}) == bool 0`].map(check).join(" * ")})`;
+
+const cc = builder();
 {
-  const b = ops;
-  const HEALTHY = `(${[`clamp_max(${BROKERS}, 1)`, `${ACTIVE_CTRL} == bool 1`, `(${OFFLINE}) == bool 0`, `(${UNDER_MIN_ISR}) == bool 0`, 'clamp_max(max(up{job="connect-jmx"}), 1)', `(${CONNECTORS_BAD}) == bool 0`, `(${ENGINES_DOWN}) == bool 0`].map(check).join(" * ")})`;
-  b.stat("", HEALTHY, [0, 0, 24, 2], {
-    valueSize: 26,
-    mappings: [valueMap([[1, "✔  All Systems Healthy   |   Kafka, Kafka Connect and every Debezium connector are running normally", "green"], [0, "✖  Attention Needed   |   a broker, connector, task or capture engine is down or degraded", "red"]])],
+  const b = cc;
+  b.stat("", PLATFORM_OK, [0, 0, 24, 2], {
+    valueSize: 24,
+    mappings: [valueMap([[1, "✔  All Systems Healthy   |   Kafka, Kafka Connect and every Debezium connector are running normally", "green"], [0, "✖  Attention Needed   |   a broker, connector, task or capture engine is down or degraded: see the walls below", "red"]])],
     thresholds: steps(["red"], ["green", 1]),
     desc: "Healthy only when the broker is up with one active controller and no offline or under-min-ISR partitions, the Connect worker is up, no connector is DEGRADED or FAILED, and every Debezium engine is connected to its database. Platform-wide (ignores the Connector filter).",
   });
 
-  // KPI tiles (platform-wide)
-  const T = 2, H = 4;
-  b.tile([0, T, 4, H], { icon: "server-network", iconColor: COL.orange, label: "Kafka Cluster", links: viewDetails("/d/kafka-cluster"),
-    main: { expr: KAFKA_OK, mappings: [valueMap([[1, "HEALTHY", "green"], [0, "DEGRADED", "red"]])], thresholds: steps(["red"], ["green", 1]) },
-    sub: { expr: BROKERS, unit: "prefix:Brokers online: ", decimals: 0 } });
-  b.tile([4, T, 4, H], { icon: "puzzle-piece", iconColor: COL.green, label: "Connectors", links: viewDetails("/d/cdc-connectors"),
-    main: { expr: CONNECTORS_BAD, unit: "suffix: DOWN", decimals: 0, mappings: [valueMap([[0, "ALL HEALTHY", "green"]]), range(1, 1e9, null, "red")], thresholds: steps(["green"], ["red", 1]), noneText: "NONE" },
-    sub: { expr: CONNECTORS_TOTAL, unit: "suffix: connectors deployed", decimals: 0 },
-    desc: "Connectors that are DEGRADED (a task failed or is missing) or FAILED." });
-  b.tile([8, T, 3, H], { icon: "layer-group", iconColor: COL.blue, label: "Tasks", links: viewDetails("/d/cdc-connectors"),
-    main: { expr: FAILED_TASKS_ALL, unit: "suffix: FAILED", decimals: 0, mappings: [valueMap([[0, "NONE FAILED", "green"]]), range(1, 1e9, null, "red")], thresholds: steps(["green"], ["red", 1]) },
-    sub: { expr: "sum(kafka_connect_worker_connector_running_task_count)", unit: "suffix: running", decimals: 0 } });
-  b.tile([11, T, 3, H], { icon: "database", iconColor: COL.purple, label: "Capture Engines", links: viewDetails("/d/cdc-connectors"),
-    main: { expr: ENGINES_DOWN, unit: "suffix: DOWN", decimals: 0, mappings: [valueMap([[0, "CONNECTED", "green"]]), range(1, 1e9, null, "red")], thresholds: steps(["green"], ["red", 1]) },
-    sub: { expr: ENGINES_TOTAL, unit: "suffix: Debezium engines", decimals: 0 },
-    desc: "Debezium engines that lost their connection to the source database." });
-  b.tile([14, T, 4, H], { icon: "bolt", iconColor: COL.yellow, label: "Max CDC Latency", subText: "worst engine (target < 30 s)",
+  // 1. Resources: is the box itself in trouble?
+  let y = 2;
+  const R = 5;
+  b.gauge("Host CPU", HOST_CPU, [0, y, 3, R], { decimals: 0, desc: "All cores of the host, busy share over 5 minutes" });
+  b.gauge("Host RAM", HOST_RAM, [3, y, 3, R], { decimals: 0, thresholds: steps(["green"], ["orange", 85], ["red", 95]), desc: "Memory in use, not counting the page cache (which the kernel frees on demand and Kafka uses to serve reads)" });
+  b.gauge("Data disk", HOST_DISK, [6, y, 3, R], { decimals: 0, thresholds: steps(["green"], ["orange", 75], ["red", 85]), desc: "Filesystem holding the Docker volumes (Kafka logs). Kafka stops when it is full: act at 75%." });
+  b.gauge("Kafka heap", HEAP_PCT("kafka-jmx"), [9, y, 3, R], { decimals: 0, desc: "Broker JVM heap used of max (1 GB). Messages are in the page cache, not here." });
+  b.gauge("Connect heap", HEAP_PCT("connect-jmx"), [12, y, 3, R], { decimals: 0, desc: "Kafka Connect + Debezium heap used of max. Debezium buffers open Oracle transactions here; a sawtooth up to 80% is normal G1 behaviour." });
+  b.bars("Container memory (used of limit)", CONTAINER_MEM, "{{name}}", [15, y, 9, R], { thresholds: steps(["green"], ["orange", 85], ["red", 95]), noValue: "No container names (cAdvisor on Docker Desktop)", desc: "Working set of each stack container as a share of its mem_limit in docker-compose.yml. At 100% the container is killed (OOM)." });
+  y += R;
+
+  // 2. Pipeline flow: captured -> written -> waiting -> consumed, and how far behind
+  const P = 4;
+  b.tile([0, y, 4, P], { icon: "database", iconColor: COL.purple, label: "Captured from DB",
+    main: { expr: CAPTURED, unit: "suffix: ev/s", decimals: 1, thresholds: steps(["green"]) },
+    sub: { expr: `sum(increase(${dbz("totalnumberofeventsseen", ALL_SERVERS)}[1h])) or on() vector(0)`, unit: "suffix: events in 1 h", decimals: 0 },
+    desc: "Change events Debezium read from the source databases (all engines)", links: viewDetails("/d/cdc-connectors") });
+  b.tile([4, y, 4, P], { icon: "arrow-right", iconColor: COL.blue, label: "Written to Kafka",
+    main: { expr: WRITTEN, unit: "suffix: rec/s", decimals: 1, thresholds: steps(["green"]) },
+    sub: { expr: MSGS_IN, unit: "suffix: msg/s into the broker", decimals: 1 },
+    desc: "Records the source connectors wrote to Kafka, and all messages produced to the broker by any client", links: viewDetails("/d/kafka-cluster") });
+  b.tile([8, y, 4, P], { icon: "inbox", iconColor: COL.orange, label: "Waiting in queue",
+    main: { expr: TOTAL_LAG, unit: "suffix: msgs", decimals: 0, thresholds: LAG_COUNT, mappings: [valueMap([[0, "EMPTY", "green"]])] },
+    sub: { expr: `count(${ALL_LAG} > 1000) or on() vector(0)`, unit: "suffix: groups over 1000 behind", decimals: 0 },
+    desc: "Messages in Kafka that consumer groups have not processed yet (total consumer lag)", links: viewDetails("/d/kafka-topics") });
+  b.tile([12, y, 4, P], { icon: "check-circle", iconColor: COL.green, label: "Consumed",
+    main: { expr: CONSUMED, unit: "suffix: msg/s", decimals: 1, thresholds: steps(["green"]) },
+    sub: { expr: `count(${GROUP_MEMBERS('consumergroup=~".+"')} > 0) or on() vector(0)`, unit: "suffix: active consumer groups", decimals: 0 },
+    desc: "Messages processed (offsets committed) by all consumer groups", links: viewDetails("/d/kafka-topics") });
+  b.tile([16, y, 4, P], { icon: "bolt", iconColor: COL.yellow, label: "CDC latency",
     main: { expr: MAX_LAG_S, unit: "s", decimals: 1, thresholds: LAG_THRESHOLDS, noneText: "IDLE" },
-    desc: "Highest MilliSecondsBehindSource of all Debezium engines: time between the change in the source database and Debezium processing it. IDLE: no change captured since the engines started." });
-  b.tile([18, T, 3, H], { icon: "exchange", iconColor: COL.teal, label: "Throughput", links: viewDetails("/d/kafka-cluster"),
-    main: { expr: `sum(rate(kafka_connect_source_task_source_record_write_total[5m])) or on() vector(0)`, unit: "suffix: rec/s", decimals: 1, thresholds: steps(["green"]) },
-    sub: { expr: MSGS_IN, unit: "suffix: msg/s into Kafka", decimals: 1 },
-    desc: "Records written to Kafka by all source connectors, and all messages produced to the broker." });
-  b.tile([21, T, 3, H], { icon: "exclamation-triangle", iconColor: COL.red, label: "Active Alerts",
-    main: { expr: 'count(ALERTS{alertstate="firing"}) or on() vector(0)', decimals: 0, thresholds: steps(["green"], ["orange", 1], ["red", 3]) },
-    sub: { expr: 'count(ALERTS{alertstate="firing"}) or on() vector(0)', mappings: [valueMap([[0, "No Active Alerts", "text"]]), { type: "range", options: { from: 1, to: 1e9, result: { text: "See alert table", color: "text" } } }] } });
+    subText: "DB commit → Debezium (worst engine)",
+    desc: "MilliSecondsBehindSource of the slowest Debezium engine. IDLE: no change captured since the engine started." });
+  b.tile([20, y, 4, P], { icon: "clock", iconColor: COL.teal, label: "Catch-up time",
+    main: { expr: CATCH_UP, unit: "s", decimals: 0, thresholds: steps(["green"], ["orange", 60], ["red", 600]), mappings: [valueMap([[0, "IN SYNC", "green"], [-2, "STALLED", "red"]])] },
+    subText: "worst consumer group at its current rate",
+    desc: "Lag / consume rate of the worst consumer group. STALLED: messages are waiting and the group consumes nothing." });
+  y += P;
 
-  // Connector-first: the fleet and the Debezium engines (filtered by the Connector / Debezium server variables)
-  connectorFleet(b, [0, 6, 24, 8]);
-  engineTable(b, [0, 14, 24, 7]);
+  // 3. Connectors and tasks: the most important part
+  const W = 4;
+  b.wall("Connectors", HEALTH(), "{{connector}}", [0, y, 10, W], { mappings: HEALTH_MAP, noValue: "NO CONNECTORS", links: viewDetails("/d/cdc-connectors"),
+    desc: "OK, PAUSED (paused or stopped on purpose), DEGRADED (running with a failed or missing task) or FAILED. A connector can be RUNNING while all its tasks have FAILED: this wall shows that as DEGRADED." });
+  b.wall("Tasks", TASK_STATE, "{{connector}} · task {{task}}", [10, y, 8, W], { mappings: TASK_MAP, noValue: "NO TASKS", links: viewDetails("/d/cdc-connectors"),
+    desc: "Every task of every connector. Tasks do the actual work: a FAILED task captures nothing." });
+  b.list("Auto-recovery (24 h)", [
+    { name: "Guardian", expr: 'max(connect_guardian_connect_up) * clamp_max(max(up{job="connect-guardian"}), 1)', mappings: [valueMap([[1, "ACTIVE", "green"], [0, "DOWN", "red"]])], colorByValue: true, noneText: "NOT DEPLOYED" },
+    { name: "Task restarts", expr: guardActions("restart"), decimals: 0, thresholds: steps(["green"], ["orange", 1]) },
+    { name: "Stall restarts", expr: guardActions("restart_stalled"), decimals: 0, thresholds: steps(["green"], ["orange", 1]) },
+    { name: "Offset resets", expr: guardActions("reset"), decimals: 0, thresholds: steps(["green"], ["red", 1]) },
+  ], [18, y, 6, W], { titleSize: 12, valueSize: 13, desc: "What connect-guardian did: restarts of failed and stalled tasks, and offset resets of connectors whose source position was lost (for example purged archive logs)." });
+  y += W;
 
-  // Section cards: health gauge + check list + trend
-  const S = 21;
-  const card = (x, title, gauge, rows, chart, link) => {
-    b.gauge("", gauge.expr, [x, S, 3, 7], { label: gauge.label, decimals: 0, thresholds: steps(["red"], ["orange", 75], ["green", 99.5]), desc: gauge.desc });
-    b.list(title, rows, [x + 3, S, 5, 7], { links: link && viewDetails(link) });
-    b.ts(chart.title, chart.targets, [x, S + 7, 8, 6], chart.o);
-  };
-  card(0, "1. Connectors & Debezium", { expr: `100 * (count((${HEALTH_ALL}) == 0) or on() vector(0)) / ${CONNECTORS_TOTAL}`, label: "Healthy", desc: "Share of connectors whose health is OK" }, [
-    { name: "Connectors", expr: CONNECTORS_TOTAL, decimals: 0 },
-    { name: "Healthy", expr: `count((${HEALTH_ALL}) == 0) or on() vector(0)`, decimals: 0 },
-    { name: "Degraded / Failed", expr: CONNECTORS_BAD, decimals: 0, thresholds: ZERO_GOOD },
-    { name: "Paused / Stopped", expr: `count((${HEALTH_ALL}) == 1) or on() vector(0)`, decimals: 0, color: COL.blue },
-    { name: "Failed Tasks", expr: FAILED_TASKS_ALL, decimals: 0, thresholds: ZERO_GOOD },
-    { name: "Engines Disconnected", expr: ENGINES_DOWN, decimals: 0, thresholds: ZERO_GOOD },
-  ], { title: "Records written to Kafka by connector (/s)", targets: [target(`sum by (connector) (rate(kafka_connect_source_task_source_record_write_total[5m]))`, "{{connector}}")], o: { unit: "short", legend: true } }, "/d/cdc-connectors");
+  b.table("Connector details", [0, y, 24, 6], {
+    by: "connector", sort: "Health",
+    desc: "One row per connector. Auto-recovery is connect-guardian's view: WATCHING (healthy), RECOVERING (restarting with backoff, or just reset), NEEDS A PERSON (permanent error such as a bad password or missing privilege), PARKED (paused or stopped by an operator).",
+    links: viewDetails("/d/cdc-connectors"),
+    queries: [
+      { expr: HEALTH() },
+      { expr: STATE() },
+      { expr: tasks("running") },
+      { expr: tasks("total") },
+      { expr: RECORDS_RATE() },
+      { expr: GUARD("connector_condition") },
+      { expr: GUARD("consecutive_restarts") },
+      { expr: `${GUARD("last_reset_timestamp_seconds")} * 1000` },
+      { expr: RECORD_ERRORS() },
+    ],
+    columns: [
+      { field: "connector", name: "Connector" },
+      { field: "Value #A", name: "Health", mappings: HEALTH_MAP, cell: "bg", width: 100, align: "center" },
+      { field: "Value #B", name: "State", mappings: STATE_MAP, cell: "text", width: 110 },
+      { field: "Value #C", name: "Tasks running", decimals: 0, width: 110 },
+      { field: "Value #D", name: "of", decimals: 0, width: 50 },
+      { field: "Value #E", name: "Records/s", unit: "short", decimals: 2, width: 100 },
+      { field: "Value #F", name: "Auto-recovery", mappings: GUARD_MAP, cell: "bg", width: 140, align: "center" },
+      { field: "Value #G", name: "Restarts", decimals: 0, thresholds: steps(["green"], ["orange", 1], ["red", 5]), cell: "text", width: 80 },
+      { field: "Value #H", name: "Last offset reset", unit: "dateTimeFromNow", width: 140 },
+      { field: "Value #I", name: "Errors (1h)", decimals: 0, thresholds: ZERO_GOOD, cell: "text", width: 90 },
+    ],
+  });
+  y += 6;
 
-  card(8, "2. Kafka Cluster", { expr: KAFKA_HEALTH, label: "Healthy", desc: "Share of passing checks: broker up, one active controller, no offline / under-replicated / under-min-ISR partitions, request handlers above 20% idle" }, [
-    { name: "Brokers Online", expr: BROKERS, decimals: 0, thresholds: steps(["red"], ["green", 1]) },
-    { name: "Active Controller", expr: ACTIVE_CTRL, mappings: CTRL_MAP, colorByValue: true },
-    { name: "Offline Partitions", expr: OFFLINE, decimals: 0, thresholds: ZERO_GOOD },
-    { name: "Under-Replicated", expr: URP, decimals: 0, thresholds: ZERO_GOOD },
-    { name: "Under Min ISR", expr: UNDER_MIN_ISR, decimals: 0, thresholds: ZERO_GOOD },
-    { name: "Request Handler Idle", expr: REQ_IDLE, unit: "percent", decimals: 0, thresholds: steps(["red"], ["orange", 20], ["green", 40]) },
-  ], { title: "Broker throughput", targets: [target(BYTES_IN, "in"), target(BYTES_OUT, "out")], o: { unit: "Bps", colors: [["in", COL.blue], ["out", COL.orange]] } }, "/d/kafka-cluster");
+  // 4. Trends: flow, lag, latency, backpressure
+  const C = 7;
+  b.ts("Pipeline flow (/s)", [target(CAPTURED, "captured from DB"), target(WRITTEN, "written to Kafka"), target(CONSUMED, "consumed")], [0, y, 6, C],
+    { unit: "short", colors: [["captured from DB", COL.purple], ["written to Kafka", COL.blue], ["consumed", COL.green]], desc: "The three stages should move together. Written but not consumed: consumers are behind. Captured high but written low: Kafka or the Connect producer is the bottleneck." });
+  b.ts("Waiting in queue by consumer group (msgs)", [target(`topk(8, ${ALL_LAG})`, "{{consumergroup}}")], [6, y, 6, C], { legend: true, thresholds: steps(["transparent"], ["orange", 1000], ["red", 10000]) });
+  b.ts("CDC latency by engine (s)", [target(LAG_S(ALL_SERVERS), "{{name}}")], [12, y, 6, C], { unit: "s", legend: true, thresholds: steps(["transparent"], ["orange", 10], ["red", 30]), desc: "Seconds between a commit in the source database and Debezium processing it. Dashed lines at 10 s and 30 s." });
+  b.ts("Backpressure: Debezium queue used (%)", [target(QUEUE_PCT(ALL_SERVERS), "{{name}}")], [18, y, 6, C], { unit: "percent", max: 100, legend: true, thresholds: steps(["transparent"], ["orange", 50], ["red", 90]), desc: "Debezium's buffer between the database reader and Kafka. Near 100%: Kafka cannot take records as fast as they are captured, and capture slows down." });
+  y += C;
 
-  card(16, "3. Topics & Consumers", { expr: `100 * (count(${GROUP_LAG('consumergroup=~".+"')} < 1000) or on() vector(0)) / count(${GROUP_LAG('consumergroup=~".+"')})`, label: "In sync", desc: "Share of consumer groups less than 1000 messages behind" }, [
-    { name: "Topics", expr: TOPICS, decimals: 0 },
-    { name: "Partitions", expr: PARTITIONS, decimals: 0 },
-    { name: "Messages In/s", expr: MSGS_IN, unit: "short", decimals: 2 },
-    { name: "Consumer Groups", expr: GROUPS, decimals: 0 },
-    { name: "Total Lag", expr: TOTAL_LAG, decimals: 0, thresholds: LAG_COUNT },
-    { name: "Max Group Lag", expr: `max(${GROUP_LAG('consumergroup=~".+"')}) or on() vector(0)`, decimals: 0, thresholds: LAG_COUNT },
-  ], { title: "Consumer lag by group (messages)", targets: [target(`topk(10, ${GROUP_LAG('consumergroup=~".+"')})`, "{{consumergroup}}")], o: { legend: true } }, "/d/kafka-topics");
-
-  // Bottom row: alerts and the JVM resources of the platform
-  const B = S + 13;
-  b.alertHistory("4. Alerts & Incident History (24h)", [0, B, 16, 9], ALERT_TEXT);
-  b.list("5. Platform Resources", [
-    { name: "Broker Heap", expr: HEAP_PCT("kafka-jmx"), unit: "percent", decimals: 0, thresholds: OK_WARN_CRIT },
-    { name: "Connect Heap", expr: HEAP_PCT("connect-jmx"), unit: "percent", decimals: 0, thresholds: OK_WARN_CRIT },
-    { name: "Broker GC Time", expr: GC_PCT("kafka-jmx"), unit: "percent", decimals: 1, thresholds: steps(["green"], ["orange", 5], ["red", 10]) },
-    { name: "Connect GC Time", expr: GC_PCT("connect-jmx"), unit: "percent", decimals: 1, thresholds: steps(["green"], ["orange", 5], ["red", 10]) },
-    { name: "Broker CPU", expr: CPU("kafka-jmx"), unit: "suffix: cores", decimals: 2 },
-    { name: "Connect CPU", expr: CPU("connect-jmx"), unit: "suffix: cores", decimals: 2 },
-    { name: "Scrape Targets Down", expr: "count(up == 0) or on() vector(0)", decimals: 0, thresholds: ZERO_GOOD },
-  ], [16, B, 8, 9], { links: viewDetails("/d/kafka-cluster"), desc: "Heap used of max, share of time spent in garbage collection, and CPU of the busiest instance" });
+  // 5. Kafka health, resources over time and alerts
+  const K = 8;
+  b.list("Kafka broker", [
+    { name: "Brokers online", expr: BROKERS, decimals: 0, thresholds: steps(["red"], ["green", 1]) },
+    { name: "Active controller", expr: ACTIVE_CTRL, mappings: CTRL_MAP, colorByValue: true },
+    { name: "Offline partitions", expr: OFFLINE, decimals: 0, thresholds: ZERO_GOOD },
+    { name: "Under min ISR", expr: UNDER_MIN_ISR, decimals: 0, thresholds: ZERO_GOOD },
+    { name: "Produce p99", expr: PRODUCE_P99, unit: "ms", decimals: 0, thresholds: steps(["green"], ["orange", 500], ["red", 1000]) },
+    { name: "Handlers idle", expr: REQ_IDLE, unit: "percent", decimals: 0, thresholds: steps(["red"], ["orange", 20], ["green", 40]) },
+    { name: "Data on disk", expr: "sum(kafka_log_size)", unit: "bytes", decimals: 1, color: COL.label },
+  ], [0, y, 6, K], { links: viewDetails("/d/kafka-cluster"), titleSize: 12, valueSize: 13 });
+  b.ts("Resources over time (%)", [target(HOST_CPU, "host CPU"), target(HOST_RAM, "host RAM"), target(HOST_DISK, "data disk"), target(HEAP_PCT("kafka-jmx"), "Kafka heap"), target(HEAP_PCT("connect-jmx"), "Connect heap")], [6, y, 8, K],
+    { unit: "percent", max: 100, fill: 0, legend: true, colors: [["host CPU", COL.blue], ["host RAM", COL.purple], ["data disk", COL.orange], ["Kafka heap", COL.teal], ["Connect heap", COL.yellow]] });
+  b.alertHistory("Alerts (24 h)", [14, y, 10, K], ALERT_TEXT);
 }
 
 // =====================================================================================================================
@@ -718,7 +796,7 @@ const tc = builder();
 }
 
 const write = (file, d) => writeFileSync(join(out, file), JSON.stringify(d, null, 2) + "\n");
-write("cdc-operations-center.json", dashboard("cdc-ops", "Kafka & CDC Operations Center", "Central health of Kafka, Kafka Connect and every Debezium connector", ops.panels, ["connector", "server"]));
+write("kafka-command-center.json", dashboard("kafka-command-center", "Kafka Stack Command Center", "The whole Kafka stack on one screen: resources, pipeline flow, connectors and tasks, auto-recovery, lag, latency, backpressure and alerts", cc.panels, ["connector"]));
 write("cdc-connectors.json", dashboard("cdc-connectors", "Debezium Connectors", "Connector and task state, Debezium streaming and snapshot metrics, task performance, errors and workers", con.panels, ["connector", "server"]));
 write("kafka-cluster.json", dashboard("kafka-cluster", "Kafka Cluster", "Broker and KRaft health, throughput, request latency, saturation, replication, storage and JVM", kc.panels));
 write("kafka-topics.json", dashboard("kafka-topics", "Topics & Consumer Groups", "Topic inventory and throughput, consumer group lag and catch-up time", tc.panels, ["topic", "group"]));

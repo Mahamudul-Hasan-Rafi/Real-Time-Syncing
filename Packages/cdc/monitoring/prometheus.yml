@@ -17,9 +17,19 @@ scrape_configs:
   - job_name: connect-jmx
     static_configs:
       - targets: ["connect:9404"]
+  # Automatic connector recovery: restarts, offset resets, connector condition
+  - job_name: connect-guardian
+    static_configs:
+      - targets: ["connect-guardian:9405"]
   - job_name: containers
+    scrape_interval: 30s
     static_configs:
       - targets: ["cadvisor:8080"]
+  # Host CPU, memory, swap and disk
+  - job_name: node
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["node-exporter:9100"]
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]

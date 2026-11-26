@@ -1,5 +1,5 @@
 # Alerts for the central Kafka + Kafka Connect / Debezium platform. Labels: severity (critical|warning|info) and
-# component (kafka|connect|debezium|consumer|jvm|monitoring). Every connector-level alert carries the connector or
+# component (kafka|connect|debezium|consumer|jvm|host|monitoring). Every connector-level alert carries the connector or
 # Debezium server label, so one rule covers all teams' connectors.
 groups:
   - name: kafka
@@ -70,7 +70,7 @@ groups:
         expr: sum by (connector) (kafka_connect_worker_connector_failed_task_count) > 0
         for: 2m
         labels: { severity: critical, component: connect }
-        annotations: { summary: "Connector {{ $labels.connector }} has {{ $value }} FAILED task(s)", description: "Kafka Connect never restarts a failed task. Check the trace, fix the cause, then POST /connectors/{{ $labels.connector }}/restart?includeTasks=true&onlyFailed=true" }
+        annotations: { summary: "Connector {{ $labels.connector }} has {{ $value }} FAILED task(s)", description: "connect-guardian restarts failed tasks with backoff; see the connect-guardian alerts for whether it is recovering or needs a person." }
 
       - alert: ConnectorTasksNotRunning
         expr: (sum by (connector) (kafka_connect_worker_connector_running_task_count) < sum by (connector) (kafka_connect_worker_connector_total_task_count)) and on (connector) (max by (connector) (kafka_connect_connector_status{status="running"}) == 1)
@@ -104,6 +104,35 @@ groups:
         for: 5m
         labels: { severity: warning, component: connect }
         annotations: { summary: "Kafka Connect has been rebalancing for 5 minutes: no task runs during a rebalance" }
+
+  - name: connect-guardian
+    rules:
+      - alert: ConnectGuardianDown
+        expr: up{job="connect-guardian"} == 0 or (time() - connect_guardian_last_check_timestamp_seconds) > 120
+        for: 2m
+        labels: { severity: critical, component: connect }
+        annotations: { summary: "connect-guardian is not checking connectors: failed connectors are not recovered automatically" }
+
+      - alert: ConnectorNeedsAttention
+        expr: connect_guardian_connector_condition == 2
+        for: 5m
+        labels: { severity: critical, component: connect }
+        annotations: { summary: "Connector {{ $labels.connector }} cannot recover by itself", description: "A permanent error (credentials, privileges, archive destination, record too large) or a lost position that policy or the reset cooldown does not allow resetting. The trace is in GET /connectors/{{ $labels.connector }}/status and in the connect-guardian-events topic." }
+
+      - alert: ConnectorRestartLoop
+        expr: connect_guardian_consecutive_restarts >= 5
+        labels: { severity: warning, component: connect }
+        annotations: { summary: "Connector {{ $labels.connector }} restarted {{ $value }} times without running stably" }
+
+      - alert: ConnectorOffsetsReset
+        expr: increase(connect_guardian_actions_total{action="reset"}[30m]) > 0
+        labels: { severity: warning, component: connect }
+        annotations: { summary: "Connector {{ $labels.connector }} lost its source position and was reset", description: "Its snapshot.mode decides what follows: a full snapshot, or streaming from now with the changes in the gap not captured. Dependent applications are told on the connect-guardian-events topic." }
+
+      - alert: ConnectorCaptureStalled
+        expr: increase(connect_guardian_actions_total{action="restart_stalled"}[1h]) > 0
+        labels: { severity: warning, component: connect }
+        annotations: { summary: "Connector {{ $labels.connector }} wrote nothing, not even heartbeats, and its task was restarted" }
 
   - name: debezium
     rules:
@@ -155,6 +184,34 @@ groups:
         for: 15m
         labels: { severity: warning, component: consumer }
         annotations: { summary: "Consumer group {{ $labels.consumergroup }} has unread messages and no running consumer" }
+
+  - name: host
+    rules:
+      # The filesystem that holds the Docker volumes (Kafka logs). Kafka stops accepting writes when it is full.
+      - alert: HostDiskSpaceLow
+        expr: max(100 * (1 - node_filesystem_avail_bytes{mountpoint=~"/|/var|/var/lib|/var/lib/docker",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{mountpoint=~"/|/var|/var/lib|/var/lib/docker",fstype!~"tmpfs|overlay|squashfs"})) > 75
+        for: 10m
+        labels: { severity: warning, component: host }
+        annotations: { summary: "Data disk {{ $value | humanize }}% used: lower log.retention or add disk before it reaches 85%" }
+
+      - alert: HostDiskSpaceCritical
+        expr: max(100 * (1 - node_filesystem_avail_bytes{mountpoint=~"/|/var|/var/lib|/var/lib/docker",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{mountpoint=~"/|/var|/var/lib|/var/lib/docker",fstype!~"tmpfs|overlay|squashfs"})) > 85
+        for: 5m
+        labels: { severity: critical, component: host }
+        annotations: { summary: "Data disk {{ $value | humanize }}% used: Kafka stops when it is full" }
+
+      # Available memory includes the reclaimable page cache, so this fires only on real memory pressure
+      - alert: HostMemoryLow
+        expr: 100 * max(node_memory_MemAvailable_bytes) / max(node_memory_MemTotal_bytes) < 10
+        for: 5m
+        labels: { severity: critical, component: host }
+        annotations: { summary: "Only {{ $value | humanize }}% of host memory available: containers risk the OOM killer" }
+
+      - alert: HostCpuSaturated
+        expr: 100 * (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 90
+        for: 15m
+        labels: { severity: warning, component: host }
+        annotations: { summary: "Host CPU {{ $value | humanize }}% busy for 15 minutes" }
 
   - name: monitoring
     rules:

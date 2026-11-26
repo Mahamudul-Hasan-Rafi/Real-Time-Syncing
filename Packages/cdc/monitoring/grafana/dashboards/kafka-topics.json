@@ -26,9 +26,9 @@
   },
   "links": [
     {
-      "title": "Operations Center",
+      "title": "Command Center",
       "type": "link",
-      "url": "/d/cdc-ops",
+      "url": "/d/kafka-command-center",
       "icon": "dashboard",
       "keepTime": true,
       "includeVars": false

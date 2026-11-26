@@ -3,7 +3,7 @@ providers:
   - name: cdc
     folder: CDC
     type: file
-    disableDeletion: true
+    disableDeletion: false
     allowUiUpdates: false
     updateIntervalSeconds: 30
     options:

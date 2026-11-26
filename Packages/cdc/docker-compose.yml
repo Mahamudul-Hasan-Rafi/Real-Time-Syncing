@@ -1,9 +1,24 @@
-# Central CDC platform: Kafka (KRaft) + Kafka Connect with Debezium + Kafka UI, and optional monitoring.
-# Connectors are deployed by each application through the Connect REST API (see cdc-es-sync/debezium/).
+# Central Kafka platform: Kafka (KRaft) + Kafka Connect with Debezium + Kafka UI, and optional monitoring.
+# Connectors are deployed by each application through the Connect REST API.
 # Usage: docker compose up -d --build      (Podman: podman compose up -d --build)
+#        docker compose --profile monitoring up -d
 # Podman cAdvisor paths: add  -f docker-compose.yml -f docker-compose.podman.yml
-# Override with env vars or a .env file: KAFKA_HOST, KAFKA_PORT, CONNECT_PORT, UI_PORT
+# Override with env vars or a .env file: KAFKA_HOST, KAFKA_PORT, CONNECT_PORT, UI_PORT, GRAFANA_PORT, PROMETHEUS_PORT
+#
+# Sized for one 8 GB / 6-core host. Memory limits add up to about 7.25 GB, leaving about 0.75 GB for the OS:
+#   kafka 3.5g (1 GB heap; the rest is page cache, which serves producers and consumers from RAM)
+#   connect 2.25g (1.5 GB heap; Debezium buffers open Oracle transactions in heap)
+#   connect-guardian 0.125g, kafka-ui 0.5g, monitoring about 1 GB
+# Kafka and Connect have no hard CPU quota (a quota freezes GC and request threads at the end of each 100 ms window);
+# they get a higher CPU weight instead, and the UI and monitoring containers get hard caps.
+# Swap is disabled for the JVMs (memswap_limit = mem_limit): a swapped heap causes multi-second GC pauses.
+# Also set vm.swappiness=1 on the host.
 name: cdc
+
+x-logging: &logging
+  options:
+    max-size: "20m"
+    max-file: "5"
 
 services:
   kafka:
@@ -15,10 +30,7 @@ services:
       - "${KAFKA_PORT:-9222}:9222"
     volumes:
       - kafka-data:/var/lib/kafka/data
-    logging:
-      options:
-        max-size: "20m"
-        max-file: "5"
+    logging: *logging
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -34,9 +46,23 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_LOG_DIRS: /var/lib/kafka/data
       KAFKA_LOG_RETENTION_HOURS: 168
-      KAFKA_HEAP_OPTS: -Xms2g -Xmx3g
-    cpus: 4
-    mem_limit: 6g
+      # 256 MB segments (default 1 GB): retention frees disk in smaller steps
+      KAFKA_LOG_SEGMENT_BYTES: 268435456
+      # Threads sized for 6 cores; recovery threads shorten the restart after an unclean shutdown
+      KAFKA_NUM_NETWORK_THREADS: 3
+      KAFKA_NUM_IO_THREADS: 6
+      KAFKA_NUM_RECOVERY_THREADS_PER_DATA_DIR: 2
+      # Keep batches as the producer compressed them (lz4 from Connect): no recompression on the broker
+      KAFKA_COMPRESSION_TYPE: producer
+      # Largest record batch the broker accepts (default 1 MB); matches Connect's producer max.request.size
+      KAFKA_MESSAGE_MAX_BYTES: 8388608
+      # Small fixed heap: messages live in the OS page cache, not in the heap
+      KAFKA_HEAP_OPTS: -Xms1g -Xmx1g -XX:+ExitOnOutOfMemoryError
+    mem_limit: 3500m
+    memswap_limit: 3500m
+    cpu_shares: 1024
+    # Time for a clean shutdown; an unclean one makes the next start rebuild indexes
+    stop_grace_period: 60s
     healthcheck:
       test: ["CMD-SHELL", "KAFKA_OPTS= /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list >/dev/null 2>&1"]
       interval: 5s
@@ -54,6 +80,7 @@ services:
         condition: service_healthy
     ports:
       - "${CONNECT_PORT:-8083}:8083"
+    logging: *logging
     environment:
       BOOTSTRAP_SERVERS: kafka:29092
       GROUP_ID: cdc-connect
@@ -63,15 +90,68 @@ services:
       CONFIG_STORAGE_REPLICATION_FACTOR: 1
       OFFSET_STORAGE_REPLICATION_FACTOR: 1
       STATUS_STORAGE_REPLICATION_FACTOR: 1
-      KAFKA_HEAP_OPTS: -Xms1g -Xmx2g
-    cpus: 3
-    mem_limit: 4g
+      # Save connector positions every 10 s (default 60 s): less to replay after a crash, and the stored
+      # Oracle SCN stays recent, so a restart needs fewer archive logs
+      OFFSET_FLUSH_INTERVAL_MS: 10000
+      # Producer defaults for every connector (CONNECT_* variables become worker properties).
+      # Fewer, larger, compressed requests: less broker CPU, disk and page cache per change event.
+      CONNECT_PRODUCER_COMPRESSION_TYPE: lz4
+      CONNECT_PRODUCER_LINGER_MS: 20
+      CONNECT_PRODUCER_BATCH_SIZE: 262144
+      # Lets a connector tune its own producer (producer.override.*) without changing the worker
+      CONNECT_CONNECTOR_CLIENT_CONFIG_OVERRIDE_POLICY: All
+      # Ride out a broker restart or a slow broker instead of failing the task: a send may wait up to 5 min
+      # (default 2 min) and block up to 2 min on a full buffer (default 1 min)
+      CONNECT_PRODUCER_DELIVERY_TIMEOUT_MS: 300000
+      CONNECT_PRODUCER_MAX_BLOCK_MS: 120000
+      # Wide rows up to 8 MB (default 1 MB) instead of a RecordTooLargeException that no restart can fix.
+      # Must not exceed the broker's message.max.bytes.
+      CONNECT_PRODUCER_MAX_REQUEST_SIZE: 8388608
+      # Time for a stopping task to close its LogMiner session and commit offsets (default 5 s); used by every
+      # restart and by connect-guardian's stop / reset / resume
+      CONNECT_TASK_SHUTDOWN_GRACEFUL_TIMEOUT_MS: 30000
+      # Exit on OutOfMemoryError so Docker restarts the worker, instead of a half-dead JVM that still answers REST
+      KAFKA_HEAP_OPTS: -Xms1536m -Xmx1536m -XX:+ExitOnOutOfMemoryError
+    mem_limit: 2304m
+    memswap_limit: 2304m
+    cpu_shares: 1024
+    # Lets tasks stop and save their offsets before the container is killed
+    stop_grace_period: 60s
     healthcheck:
       test: ["CMD-SHELL", "curl -sf localhost:8083/ >/dev/null"]
       interval: 5s
       timeout: 10s
       retries: 60
       start_period: 15s
+
+  # Automatic recovery for every connector: restarts failed and stalled tasks, and resets the offsets of a connector
+  # whose stored position is gone (purged archive logs). Actions go to the connect-guardian-events topic and to
+  # Prometheus. Details and per-connector settings: guardian/README.md
+  connect-guardian:
+    build: ./guardian
+    image: era/connect-guardian:1.0.0
+    container_name: connect-guardian
+    restart: unless-stopped
+    depends_on:
+      connect:
+        condition: service_healthy
+    volumes:
+      - guardian-data:/data
+    logging: *logging
+    environment:
+      CONNECT_URL: http://connect:8083
+      CONNECT_METRICS_URL: http://connect:9404/metrics
+      KAFKA_BOOTSTRAP: kafka:29092
+      # reset: stop, delete offsets, resume (the connector's snapshot.mode then decides full load or skip the gap)
+      # alert: leave the connector FAILED and publish an event. Per connector: guardian.on.position.lost
+      ON_POSITION_LOST: reset
+      # Restart a RUNNING task that wrote nothing (not even a heartbeat) for this long; 0 turns it off
+      STALL_SECONDS: 900
+      # true: log and publish what would be done, change nothing (first UAT run)
+      DRY_RUN: "false"
+    cpus: 0.25
+    mem_limit: 128m
+    cpu_shares: 512
 
   kafka-ui:
     build: ./dockerfiles/kafka-ui
@@ -85,13 +165,15 @@ services:
         condition: service_healthy
     ports:
       - "${UI_PORT:-8085}:8080"
+    logging: *logging
     environment:
-      JAVA_OPTS: -Xms256m -Xmx512m
+      JAVA_OPTS: -Xms128m -Xmx256m
       AUTH_TYPE: LOGIN_FORM
       SPRING_SECURITY_USER_NAME: ${KAFKA_UI_USER:-admin}
       SPRING_SECURITY_USER_PASSWORD: ${KAFKA_UI_PASSWORD:?set KAFKA_UI_PASSWORD in Packages/cdc/.env (Kafka UI login password)}
-    cpus: 1
-    mem_limit: 1g
+    cpus: 0.5
+    mem_limit: 512m
+    cpu_shares: 256
 
   # ---- Optional monitoring: docker compose --profile monitoring up -d ----
   kafka-exporter:
@@ -102,21 +184,46 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-    cpus: 0.5
-    mem_limit: 256m
+    logging: *logging
+    cpus: 0.25
+    mem_limit: 96m
+    cpu_shares: 256
 
+  # Host CPU, memory, swap and disk usage (the Kafka data disk)
+  node-exporter:
+    profiles: ["monitoring"]
+    image: quay.io/prometheus/node-exporter:v1.8.2
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|run|sys|host/dev|host/proc|host/run|host/sys)($$|/)
+    volumes:
+      - /:/host:ro
+    logging: *logging
+    cpus: 0.25
+    mem_limit: 48m
+    cpu_shares: 256
+
+  # Per-container CPU and memory. Only the metric groups the dashboards use, refreshed every 30 s.
   cadvisor:
     profiles: ["monitoring"]
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     restart: unless-stopped
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=30s
+      - --store_container_labels=false
+      - --disable_metrics=advtcp,cpu_topology,cpuset,hugetlb,memory_numa,percpu,perf_event,process,referenced_memory,resctrl,sched,tcp,udp
     # Docker paths; on Podman add: -f docker-compose.podman.yml
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
-    cpus: 0.5
-    mem_limit: 512m
+    logging: *logging
+    cpus: 0.25
+    mem_limit: 192m
+    cpu_shares: 256
 
   prometheus:
     profiles: ["monitoring"]
@@ -124,15 +231,18 @@ services:
     restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=2GB
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro,z
       - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro,z
       - prometheus-data:/prometheus
     ports:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
-    cpus: 1
-    mem_limit: 1g
+    logging: *logging
+    cpus: 0.5
+    mem_limit: 384m
+    cpu_shares: 256
 
   grafana:
     profiles: ["monitoring"]
@@ -142,17 +252,25 @@ services:
       - prometheus
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-change-me}
+      # Only applied when Grafana first creates its database; change an existing password in the UI
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?set GRAFANA_PASSWORD in Packages/cdc/.env (Grafana admin password)}
+      # The UAT / bank network has no internet access
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro,z
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro,z
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
-    cpus: 1
-    mem_limit: 1g
+    logging: *logging
+    cpus: 0.5
+    mem_limit: 256m
+    cpu_shares: 256
 
 volumes:
+  guardian-data:
   kafka-data:
   prometheus-data:
   grafana-data:
